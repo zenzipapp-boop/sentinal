@@ -1,0 +1,12 @@
+# market_pipeline — Python dependencies
+yfinance>=0.2.38
+requests>=2.31.0
+pandas>=2.2.0
+numpy>=1.26.0
+beautifulsoup4>=4.14.3
+browser-use>=0.12.6
+feedparser>=6.0.11
+mcp>=1.27.0
+langchain-ollama>=1.1.0
+python-dotenv>=1.1.0
+pypdf>=5.0.0

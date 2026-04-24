@@ -1,0 +1,21 @@
+{
+  "ticker": "LT.NS",
+  "status": "active",
+  "category": "core",
+  "paper": false,
+  "entry_date": "2026-03-15",
+  "avg_price": 3585.36,
+  "total_qty": 5,
+  "allocation_pct": 0,
+  "total_invested": 17926.8,
+  "original_thesis": "",
+  "thesis_assumptions": [],
+  "thesis_history": [],
+  "audit_log": [],
+  "transactions": [],
+  "fundamentals": {},
+  "screener_cache_path": "screener_data/LT.NS.json",
+  "annual_report_path": "annual_reports/processed/LT.NS",
+  "exit_date": null,
+  "exit_reason": null
+}

@@ -1,0 +1,113 @@
+{
+  "ticker": "DIXON.NS",
+  "source_dir": "annual_reports/processed",
+  "generated_at": "2026-04-23T20:38:52",
+  "report_count": 5,
+  "reports": [
+    {
+      "report_title": "20-21",
+      "one_line_summary": "",
+      "main_points": [],
+      "financial_trend": "",
+      "capex_and_growth": [],
+      "risks": [],
+      "thesis_implications": [],
+      "management_tone": "",
+      "confidence_score": 0,
+      "source": "20-21.pdf",
+      "summary_file": "20-21.json"
+    },
+    {
+      "report_title": "21-22",
+      "one_line_summary": "",
+      "main_points": [],
+      "financial_trend": "",
+      "capex_and_growth": [],
+      "risks": [],
+      "thesis_implications": [],
+      "management_tone": "",
+      "confidence_score": 0,
+      "source": "21-22.pdf",
+      "summary_file": "21-22.json"
+    },
+    {
+      "report_title": "22-23",
+      "one_line_summary": "",
+      "main_points": [],
+      "financial_trend": "",
+      "capex_and_growth": [],
+      "risks": [],
+      "thesis_implications": [],
+      "management_tone": "",
+      "confidence_score": 0,
+      "source": "22-23.pdf",
+      "summary_file": "22-23.json"
+    },
+    {
+      "report_title": "23-24",
+      "one_line_summary": "",
+      "main_points": [],
+      "financial_trend": "",
+      "capex_and_growth": [],
+      "risks": [],
+      "thesis_implications": [],
+      "management_tone": "",
+      "confidence_score": 0,
+      "source": "23-24.pdf",
+      "summary_file": "23-24.json"
+    },
+    {
+      "report_title": "24-25",
+      "one_line_summary": "",
+      "main_points": [],
+      "financial_trend": "",
+      "capex_and_growth": [],
+      "risks": [],
+      "thesis_implications": [],
+      "management_tone": "",
+      "confidence_score": 0,
+      "source": "24-25.pdf",
+      "summary_file": "24-25.json"
+    }
+  ],
+  "combined_summary": {
+    "ticker": "DIXON.NS",
+    "portfolio_summary": "Insufficient data to generate a summary. All provided annual report summaries are empty, preventing synthesis of the latest company story. Please ensure the report summaries contain actionable insights for analysis.",
+    "main_trends": [
+      "No discernible trends available due to empty report summaries."
+    ],
+    "repeated_themes": [
+      "No repeated themes identified."
+    ],
+    "key_risks": [
+      "No key risks extracted from the reports."
+    ],
+    "thesis_implications": [
+      "No thesis implications can be drawn without content."
+    ],
+    "management_tone": "Neutral/Cannot determine, as all report summaries are empty.",
+    "confidence_score": 1,
+    "raw": "```json\n{\n  \"ticker\": \"DIXON.NS\",\n  \"portfolio_summary\": \"Insufficient data to generate a summary. All provided annual report summaries are empty, preventing synthesis of the latest company story. Please ensure the report summaries contain actionable insights for analysis.\",\n  \"main_trends\": [\n    \"No discernible trends available due to empty report summaries.\"\n  ],\n  \"repeated_themes\": [\n    \"No repeated themes identified.\"\n  ],\n  \"key_risks\": [\n    \"No key risks extracted from the reports.\"\n  ],\n  \"thesis_implications\": [\n    \"No thesis implications can be drawn without content.\"\n  ],\n  \"management_tone\": \"Neutral/Cannot determine, as all report summaries are empty.\",\n  \"confidence_score\": 1\n}\n```",
+    "model": "gemma4:latest"
+  },
+  "summary_files": [
+    "annual_reports/processed/DIXON.NS/summaries/20-21.json",
+    "annual_reports/processed/DIXON.NS/summaries/21-22.json",
+    "annual_reports/processed/DIXON.NS/summaries/22-23.json",
+    "annual_reports/processed/DIXON.NS/summaries/23-24.json",
+    "annual_reports/processed/DIXON.NS/summaries/24-25.json"
+  ],
+  "text_files": [
+    "annual_reports/processed/DIXON.NS/raw/20-21.txt",
+    "annual_reports/processed/DIXON.NS/raw/21-22.txt",
+    "annual_reports/processed/DIXON.NS/raw/22-23.txt",
+    "annual_reports/processed/DIXON.NS/raw/23-24.txt",
+    "annual_reports/processed/DIXON.NS/raw/24-25.txt"
+  ],
+  "models": [
+    "gemma4:latest",
+    "gemma4:26b",
+    "gpt-oss:20b"
+  ],
+  "skip_llm": false
+}

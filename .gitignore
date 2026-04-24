@@ -1,0 +1,37 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/
+env/
+venv/
+
+# IDE files
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+
+# PyCharm
+*.idea/
+*.iml
+
+# VSCode
+.vscode/
+
+# Local settings
+*.local.json
+
+# Reports and generated data
+reports/
+annual_reports/processed/
+annual_reports/raw/
+portfolio_data/exited/
+portfolio_data/watchlist/

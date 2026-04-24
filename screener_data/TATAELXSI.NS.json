@@ -1,0 +1,524 @@
+{
+  "company_url": "https://www.screener.in/company/TATAELXSI/consolidated/",
+  "key_ratios": {
+    "top_ratios": [
+      {
+        "name": "Market Cap",
+        "value": "₹ 26,372 Cr."
+      },
+      {
+        "name": "Current Price",
+        "value": "₹ 4,234"
+      },
+      {
+        "name": "High / Low",
+        "value": "₹ 6,735 / 3,966"
+      },
+      {
+        "name": "Stock P/E",
+        "value": "258"
+      },
+      {
+        "name": "Book Value",
+        "value": "₹ 45.5"
+      },
+      {
+        "name": "Dividend Yield",
+        "value": "1.77 %"
+      },
+      {
+        "name": "ROCE",
+        "value": "60.0 %"
+      },
+      {
+        "name": "ROE",
+        "value": "39.3 %"
+      },
+      {
+        "name": "Face Value",
+        "value": "₹ 10.0"
+      }
+    ],
+    "columns": [
+      "Unnamed: 0",
+      "Mar 2015",
+      "Mar 2014",
+      "Mar 2013",
+      "Mar 2012",
+      "Mar 2011"
+    ],
+    "rows": [
+      {
+        "Unnamed: 0": "Debtor Days",
+        "Mar 2015": "66",
+        "Mar 2014": "73",
+        "Mar 2013": "83",
+        "Mar 2012": "85",
+        "Mar 2011": "94"
+      },
+      {
+        "Unnamed: 0": "Inventory Days",
+        "Mar 2015": "",
+        "Mar 2014": "0",
+        "Mar 2013": "",
+        "Mar 2012": "0",
+        "Mar 2011": "9"
+      },
+      {
+        "Unnamed: 0": "Days Payable",
+        "Mar 2015": "",
+        "Mar 2014": "",
+        "Mar 2013": "",
+        "Mar 2012": "385",
+        "Mar 2011": "678"
+      },
+      {
+        "Unnamed: 0": "Cash Conversion Cycle",
+        "Mar 2015": "66",
+        "Mar 2014": "73",
+        "Mar 2013": "83",
+        "Mar 2012": "-300",
+        "Mar 2011": "-575"
+      },
+      {
+        "Unnamed: 0": "Working Capital Days",
+        "Mar 2015": "10",
+        "Mar 2014": "22",
+        "Mar 2013": "4",
+        "Mar 2012": "10",
+        "Mar 2011": "15"
+      },
+      {
+        "Unnamed: 0": "ROCE %",
+        "Mar 2015": "60%",
+        "Mar 2014": "47%",
+        "Mar 2013": "22%",
+        "Mar 2012": "27%",
+        "Mar 2011": "16%"
+      }
+    ]
+  },
+  "quarterly_results": {
+    "columns": [
+      "Unnamed: 0",
+      "Mar 2015",
+      "Dec 2014",
+      "Sep 2014",
+      "Jun 2014",
+      "Mar 2014"
+    ],
+    "rows": [
+      {
+        "Unnamed: 0": "Sales +",
+        "Mar 2015": "231",
+        "Dec 2014": "221",
+        "Sep 2014": "206",
+        "Jun 2014": "191",
+        "Mar 2014": "212"
+      },
+      {
+        "Unnamed: 0": "Expenses +",
+        "Mar 2015": "184",
+        "Dec 2014": "171",
+        "Sep 2014": "164",
+        "Jun 2014": "153",
+        "Mar 2014": "165"
+      },
+      {
+        "Unnamed: 0": "Operating Profit",
+        "Mar 2015": "47",
+        "Dec 2014": "50",
+        "Sep 2014": "42",
+        "Jun 2014": "38",
+        "Mar 2014": "47"
+      },
+      {
+        "Unnamed: 0": "OPM %",
+        "Mar 2015": "20%",
+        "Dec 2014": "23%",
+        "Sep 2014": "20%",
+        "Jun 2014": "20%",
+        "Mar 2014": "22%"
+      },
+      {
+        "Unnamed: 0": "Other Income +",
+        "Mar 2015": "-1",
+        "Dec 2014": "0",
+        "Sep 2014": "1",
+        "Jun 2014": "2",
+        "Mar 2014": "0"
+      },
+      {
+        "Unnamed: 0": "Interest",
+        "Mar 2015": "0",
+        "Dec 2014": "0",
+        "Sep 2014": "0",
+        "Jun 2014": "0",
+        "Mar 2014": "0"
+      },
+      {
+        "Unnamed: 0": "Depreciation",
+        "Mar 2015": "1",
+        "Dec 2014": "7",
+        "Sep 2014": "8",
+        "Jun 2014": "9",
+        "Mar 2014": "12"
+      },
+      {
+        "Unnamed: 0": "Profit before tax",
+        "Mar 2015": "45",
+        "Dec 2014": "43",
+        "Sep 2014": "35",
+        "Jun 2014": "31",
+        "Mar 2014": "35"
+      },
+      {
+        "Unnamed: 0": "Tax %",
+        "Mar 2015": "34%",
+        "Dec 2014": "36%",
+        "Sep 2014": "33%",
+        "Jun 2014": "33%",
+        "Mar 2014": "38%"
+      },
+      {
+        "Unnamed: 0": "Net Profit +",
+        "Mar 2015": "30",
+        "Dec 2014": "28",
+        "Sep 2014": "24",
+        "Jun 2014": "21",
+        "Mar 2014": "22"
+      },
+      {
+        "Unnamed: 0": "EPS in Rs",
+        "Mar 2015": "4.79",
+        "Dec 2014": "4.46",
+        "Sep 2014": "3.79",
+        "Jun 2014": "3.34",
+        "Mar 2014": "3.51"
+      },
+      {
+        "Unnamed: 0": "Raw PDF",
+        "Mar 2015": "",
+        "Dec 2014": "",
+        "Sep 2014": "",
+        "Jun 2014": "",
+        "Mar 2014": ""
+      }
+    ]
+  },
+  "profit_loss": {
+    "columns": [
+      "Unnamed: 0",
+      "Mar 2015",
+      "Mar 2014",
+      "Mar 2013",
+      "Mar 2012",
+      "Mar 2011"
+    ],
+    "rows": [
+      {
+        "Unnamed: 0": "Sales +",
+        "Mar 2015": "849",
+        "Mar 2014": "775",
+        "Mar 2013": "622",
+        "Mar 2012": "539",
+        "Mar 2011": "416"
+      },
+      {
+        "Unnamed: 0": "Expenses +",
+        "Mar 2015": "671",
+        "Mar 2014": "637",
+        "Mar 2013": "549",
+        "Mar 2012": "464",
+        "Mar 2011": "368"
+      },
+      {
+        "Unnamed: 0": "Operating Profit",
+        "Mar 2015": "178",
+        "Mar 2014": "137",
+        "Mar 2013": "73",
+        "Mar 2012": "75",
+        "Mar 2011": "48"
+      },
+      {
+        "Unnamed: 0": "OPM %",
+        "Mar 2015": "21%",
+        "Mar 2014": "18%",
+        "Mar 2013": "12%",
+        "Mar 2012": "14%",
+        "Mar 2011": "11%"
+      },
+      {
+        "Unnamed: 0": "Other Income +",
+        "Mar 2015": "3",
+        "Mar 2014": "12",
+        "Mar 2013": "-11",
+        "Mar 2012": "4",
+        "Mar 2011": "4"
+      },
+      {
+        "Unnamed: 0": "Interest",
+        "Mar 2015": "1",
+        "Mar 2014": "3",
+        "Mar 2013": "5",
+        "Mar 2012": "3",
+        "Mar 2011": "2"
+      },
+      {
+        "Unnamed: 0": "Depreciation",
+        "Mar 2015": "26",
+        "Mar 2014": "35",
+        "Mar 2013": "24",
+        "Mar 2012": "21",
+        "Mar 2011": "17"
+      },
+      {
+        "Unnamed: 0": "Profit before tax",
+        "Mar 2015": "155",
+        "Mar 2014": "112",
+        "Mar 2013": "33",
+        "Mar 2012": "55",
+        "Mar 2011": "32"
+      },
+      {
+        "Unnamed: 0": "Tax %",
+        "Mar 2015": "34%",
+        "Mar 2014": "36%",
+        "Mar 2013": "33%",
+        "Mar 2012": "30%",
+        "Mar 2011": "-2%"
+      },
+      {
+        "Unnamed: 0": "Net Profit +",
+        "Mar 2015": "102",
+        "Mar 2014": "72",
+        "Mar 2013": "21",
+        "Mar 2012": "35",
+        "Mar 2011": "33"
+      },
+      {
+        "Unnamed: 0": "EPS in Rs",
+        "Mar 2015": "16.38",
+        "Mar 2014": "11.60",
+        "Mar 2013": "3.42",
+        "Mar 2012": "5.55",
+        "Mar 2011": "5.22"
+      },
+      {
+        "Unnamed: 0": "Dividend Payout %",
+        "Mar 2015": "34%",
+        "Mar 2014": "39%",
+        "Mar 2013": "73%",
+        "Mar 2012": "63%",
+        "Mar 2011": "67%"
+      }
+    ]
+  },
+  "balance_sheet": {
+    "columns": [
+      "Unnamed: 0",
+      "Mar 2015",
+      "Mar 2014",
+      "Mar 2013",
+      "Mar 2012",
+      "Mar 2011"
+    ],
+    "rows": [
+      {
+        "Unnamed: 0": "Equity Capital",
+        "Mar 2015": 31,
+        "Mar 2014": 31,
+        "Mar 2013": 31,
+        "Mar 2012": 31,
+        "Mar 2011": 31
+      },
+      {
+        "Unnamed: 0": "Reserves",
+        "Mar 2015": 252,
+        "Mar 2014": 205,
+        "Mar 2013": 164,
+        "Mar 2012": 161,
+        "Mar 2011": 151
+      },
+      {
+        "Unnamed: 0": "Borrowings +",
+        "Mar 2015": 0,
+        "Mar 2014": 0,
+        "Mar 2013": 59,
+        "Mar 2012": 34,
+        "Mar 2011": 25
+      },
+      {
+        "Unnamed: 0": "Other Liabilities +",
+        "Mar 2015": 182,
+        "Mar 2014": 153,
+        "Mar 2013": 112,
+        "Mar 2012": 108,
+        "Mar 2011": 94
+      },
+      {
+        "Unnamed: 0": "Total Liabilities",
+        "Mar 2015": 466,
+        "Mar 2014": 388,
+        "Mar 2013": 365,
+        "Mar 2012": 335,
+        "Mar 2011": 302
+      },
+      {
+        "Unnamed: 0": "Fixed Assets +",
+        "Mar 2015": 98,
+        "Mar 2014": 97,
+        "Mar 2013": 99,
+        "Mar 2012": 100,
+        "Mar 2011": 91
+      },
+      {
+        "Unnamed: 0": "CWIP",
+        "Mar 2015": 3,
+        "Mar 2014": 13,
+        "Mar 2013": 21,
+        "Mar 2012": 10,
+        "Mar 2011": 12
+      },
+      {
+        "Unnamed: 0": "Investments",
+        "Mar 2015": 0,
+        "Mar 2014": 0,
+        "Mar 2013": 0,
+        "Mar 2012": 0,
+        "Mar 2011": 0
+      },
+      {
+        "Unnamed: 0": "Other Assets +",
+        "Mar 2015": 364,
+        "Mar 2014": 279,
+        "Mar 2013": 245,
+        "Mar 2012": 224,
+        "Mar 2011": 199
+      },
+      {
+        "Unnamed: 0": "Total Assets",
+        "Mar 2015": 466,
+        "Mar 2014": 388,
+        "Mar 2013": 365,
+        "Mar 2012": 335,
+        "Mar 2011": 302
+      }
+    ]
+  },
+  "cash_flows": {
+    "columns": [
+      "Unnamed: 0",
+      "Mar 2015",
+      "Mar 2014",
+      "Mar 2013",
+      "Mar 2012",
+      "Mar 2011"
+    ],
+    "rows": [
+      {
+        "Unnamed: 0": "Cash from Operating Activity +",
+        "Mar 2015": "143",
+        "Mar 2014": "129",
+        "Mar 2013": "38",
+        "Mar 2012": "62",
+        "Mar 2011": "71"
+      },
+      {
+        "Unnamed: 0": "Cash from Investing Activity +",
+        "Mar 2015": "-29",
+        "Mar 2014": "-22",
+        "Mar 2013": "-30",
+        "Mar 2012": "-33",
+        "Mar 2011": "-29"
+      },
+      {
+        "Unnamed: 0": "Cash from Financing Activity +",
+        "Mar 2015": "-32",
+        "Mar 2014": "-79",
+        "Mar 2013": "-11",
+        "Mar 2012": "-23",
+        "Mar 2011": "-36"
+      },
+      {
+        "Unnamed: 0": "Net Cash Flow",
+        "Mar 2015": "82",
+        "Mar 2014": "28",
+        "Mar 2013": "-4",
+        "Mar 2012": "6",
+        "Mar 2011": "7"
+      },
+      {
+        "Unnamed: 0": "Free Cash Flow",
+        "Mar 2015": "110",
+        "Mar 2014": "105",
+        "Mar 2013": "4",
+        "Mar 2012": "34",
+        "Mar 2011": "42"
+      },
+      {
+        "Unnamed: 0": "CFO/OP",
+        "Mar 2015": "102%",
+        "Mar 2014": "106%",
+        "Mar 2013": "76%",
+        "Mar 2012": "101%",
+        "Mar 2011": "170%"
+      }
+    ]
+  },
+  "shareholding_pattern": {
+    "columns": [
+      "Unnamed: 0",
+      "Mar 2026",
+      "Dec 2025",
+      "Sep 2025",
+      "Jun 2025",
+      "Mar 2025"
+    ],
+    "rows": [
+      {
+        "Unnamed: 0": "Promoters +",
+        "Mar 2026": "43.90%",
+        "Dec 2025": "43.90%",
+        "Sep 2025": "43.90%",
+        "Jun 2025": "43.91%",
+        "Mar 2025": "43.91%"
+      },
+      {
+        "Unnamed: 0": "FIIs +",
+        "Mar 2026": "11.08%",
+        "Dec 2025": "8.56%",
+        "Sep 2025": "12.53%",
+        "Jun 2025": "12.74%",
+        "Mar 2025": "12.73%"
+      },
+      {
+        "Unnamed: 0": "DIIs +",
+        "Mar 2026": "11.39%",
+        "Dec 2025": "12.28%",
+        "Sep 2025": "10.37%",
+        "Jun 2025": "9.79%",
+        "Mar 2025": "8.54%"
+      },
+      {
+        "Unnamed: 0": "Public +",
+        "Mar 2026": "33.62%",
+        "Dec 2025": "35.24%",
+        "Sep 2025": "33.18%",
+        "Jun 2025": "33.54%",
+        "Mar 2025": "34.82%"
+      },
+      {
+        "Unnamed: 0": "No. of Shareholders",
+        "Mar 2026": "566988",
+        "Dec 2025": "573312",
+        "Sep 2025": "578736",
+        "Jun 2025": "579310",
+        "Mar 2025": "589967"
+      }
+    ]
+  },
+  "ticker": "TATAELXSI.NS",
+  "updated": "2026-04-23",
+  "source": "fallback-http"
+}
