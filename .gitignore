@@ -31,7 +31,7 @@ Thumbs.db
 
 # Reports and generated data
 reports/
-annual_reports/processed/
-annual_reports/raw/
-portfolio_data/exited/
-portfolio_data/watchlist/
+annual_reports
+portfolio_data
+portfolio_data
+screener_data
