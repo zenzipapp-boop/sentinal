@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import logging
 import re
@@ -13,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import ollama
 from pypdf import PdfReader
 
 from market_pipeline import extract_json, ollama_generate, screener_company_slug
@@ -168,6 +170,118 @@ def normalize_label(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value).lower())
 
 
+def assess_page_quality(text: str, surrounding_context: str = "") -> tuple[str, str]:
+    """Score extraction quality and return (quality_level, reason).
+
+    quality_level: 'good' | 'low'
+    reason: short description of the quality decision
+    """
+    text_clean = text.strip()
+
+    # Empty page is low quality
+    if not text_clean:
+        return "low", "empty page"
+
+    # Check text length: < 100 chars suggests OCR failure or image page
+    if len(text_clean) < 100:
+        return "low", "sparse text"
+
+    # Detect visual page keywords in surrounding context
+    visual_keywords = ["chart", "figure", "graph", "diagram", "image", "plot"]
+    if surrounding_context and any(kw in surrounding_context.lower() for kw in visual_keywords):
+        return "low", "visual page detected"
+
+    # Count numeric tokens vs words
+    tokens = text_clean.split()
+    numeric_tokens = sum(1 for t in tokens if re.match(r'^[\d,.%-]+$', t))
+    word_tokens = sum(1 for t in tokens if re.match(r'^[a-zA-Z]+$', t))
+
+    if word_tokens == 0:
+        return "low", "no words detected"
+
+    numeric_ratio = numeric_tokens / len(tokens) if tokens else 0
+    if numeric_ratio > 0.30:
+        return "low", "floating numbers detected"
+
+    # Check for table patterns: ratio of numbers to words > 3:1 suggests table
+    if word_tokens > 0 and numeric_tokens / word_tokens > 3:
+        return "low", "table structure detected"
+
+    # Check for repeated whitespace patterns suggesting column misalignment
+    if re.search(r' {4,}', text_clean):
+        lines = text_clean.split('\n')
+        space_heavy_lines = sum(1 for line in lines if re.search(r' {4,}', line))
+        if space_heavy_lines / len(lines) > 0.5:
+            return "low", "column misalignment detected"
+
+    return "good", "clean text extraction"
+
+
+def render_page_to_image(pdf_path: Path, page_num: int, dpi: int = 150) -> bytes | None:
+    """Render a PDF page to PNG image bytes using pypdf or pymupdf.
+
+    Returns image bytes or None if rendering fails.
+    """
+    try:
+        import fitz
+        doc = fitz.open(str(pdf_path))
+        if page_num < 0 or page_num >= len(doc):
+            return None
+        page = doc[page_num]
+        pix = page.get_pixmap(matrix=fitz.Matrix(dpi/72, dpi/72))
+        image_bytes = pix.tobytes()
+        doc.close()
+        return image_bytes
+    except ImportError:
+        pass
+    except Exception as exc:
+        log.warning("pymupdf rendering failed for page %d: %s", page_num, exc)
+        return None
+
+    # Fallback: try pypdf (limited vision support)
+    try:
+        reader = PdfReader(str(pdf_path))
+        if page_num < 0 or page_num >= len(reader.pages):
+            return None
+        # pypdf doesn't have built-in rendering, return None
+        return None
+    except Exception as exc:
+        log.warning("pypdf rendering failed for page %d: %s", page_num, exc)
+        return None
+
+
+def extract_page_with_vision(image_bytes: bytes) -> str | None:
+    """Extract text from page image using Ollama vision API (gemma4:latest).
+
+    Returns extracted text or None if extraction fails.
+    """
+    try:
+        image_b64 = base64.b64encode(image_bytes).decode()
+        response = ollama.chat(
+            model="gemma4:latest",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You are extracting financial data from an Indian annual report page. Extract all text, tables, and numerical data exactly as shown. For tables, preserve row and column structure using pipe | separators. For charts or graphs, describe the key data points and trends shown. Output plain text only, no markdown formatting."
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{image_b64}"}
+                        }
+                    ]
+                }
+            ],
+            options={"num_ctx": 131072},
+        )
+        return response["message"]["content"]
+    except Exception as exc:
+        log.warning("Ollama vision extraction failed: %s", exc)
+        return None
+
+
 def find_source_dir(root: Path, ticker: str) -> Path:
     if root.is_file():
         return root.parent
@@ -253,7 +367,11 @@ def save_baseline(path: Path, year: str, baseline: dict[str, Any]) -> None:
     log.info("Saved baseline for %s to %s", year, path)
 
 
-def read_pdf_pages(pdf_path: Path) -> list[dict[str, Any]]:
+def extract_pdf_pages(pdf_path: Path) -> list[dict[str, Any]]:
+    """Extract pages with hybrid strategy: quality assessment + vision fallback.
+
+    Returns list of page dicts with 'page', 'text', and 'extraction_method' keys.
+    """
     reader = PdfReader(str(pdf_path))
     if reader.is_encrypted:
         try:
@@ -261,7 +379,10 @@ def read_pdf_pages(pdf_path: Path) -> list[dict[str, Any]]:
         except Exception:
             pass
 
-    pages: list[dict[str, Any]] = []
+    all_pages: list[dict[str, Any]] = []
+    vision_candidates: list[tuple[int, str]] = []  # (page_number, reason)
+
+    # Phase 1: Extract text from all pages and assess quality
     for page_number, page in enumerate(reader.pages, start=1):
         try:
             text = page.extract_text() or ""
@@ -273,12 +394,62 @@ def read_pdf_pages(pdf_path: Path) -> list[dict[str, Any]]:
         text = re.sub(r"\s+", " ", text.replace("\x00", " ")).strip()
 
         # Bouncer: Skip pages that match blacklisted keywords
-        if any(keyword in text.lower() for keyword in BLACKLISTED_PAGES):
-            log.info(f"Skipping Page {page_number} (Detected as Noise: {[k for k in BLACKLISTED_PAGES if k in text.lower()][0]})")
+        matched = next((k for k in BLACKLISTED_PAGES if k in text.lower()), None)
+        if matched:
+            log.info("Skipping Page %d (Detected as Noise: %s)", page_number, matched)
             continue
 
-        pages.append({"page": page_number, "text": text})
-    return pages
+        # Assess extraction quality
+        surrounding = ""
+        if all_pages:
+            surrounding = all_pages[-1].get("text", "")
+        quality, reason = assess_page_quality(text, surrounding)
+
+        page_data = {
+            "page": page_number,
+            "text": text,
+            "extraction_method": "pdfplumber",
+            "quality": quality,
+            "quality_reason": reason,
+        }
+
+        if quality == "low":
+            vision_candidates.append((page_number - 1, reason))  # 0-indexed for pypdf
+
+        all_pages.append(page_data)
+
+    # Phase 2: Vision extraction for flagged pages (cap at 20)
+    vision_pages_processed = 0
+    max_vision_pages = 20
+
+    for page_idx, reason in vision_candidates[:max_vision_pages]:
+        page_number = page_idx + 1
+        image_bytes = render_page_to_image(pdf_path, page_idx, dpi=150)
+
+        if image_bytes:
+            vision_text = extract_page_with_vision(image_bytes)
+            if vision_text:
+                # Find and update the page in all_pages
+                for pg in all_pages:
+                    if pg["page"] == page_number:
+                        pg["text"] = vision_text
+                        pg["extraction_method"] = "vision/gemma4:26b"
+                        vision_pages_processed += 1
+                        log.info("Page %d: vision/gemma4:26b (quality: low — %s)", page_number, reason)
+                        break
+            else:
+                log.info("Page %d: pdfplumber (quality: low — %s, vision failed)", page_number, reason)
+        else:
+            log.info("Page %d: pdfplumber (quality: low — %s, rendering failed)", page_number, reason)
+
+    # Log summary at the end
+    pdfplumber_count = sum(1 for p in all_pages if p["extraction_method"] == "pdfplumber")
+    vision_count = sum(1 for p in all_pages if p["extraction_method"] == "vision/gemma4:26b")
+    if vision_count > 0 or len(vision_candidates) > max_vision_pages:
+        extra_msg = f" (capped at {max_vision_pages})" if len(vision_candidates) > max_vision_pages else ""
+        log.info("Extraction summary: %d pages pdfplumber | %d pages vision%s", pdfplumber_count, vision_count, extra_msg)
+
+    return all_pages
 
 
 def chunk_pages(pages: list[dict[str, Any]], max_chars: int = 32000) -> list[dict[str, Any]]:
@@ -340,7 +511,7 @@ def generate_with_fallback(
     last_error = ""
     for model in models:
         try:
-            effective_ctx = 131072
+            effective_ctx = num_ctx if num_ctx else 131072
             raw = ollama_generate(
                 model,
                 prompt,
@@ -504,7 +675,7 @@ def process_report(pdf_paths: list[Path], ticker: str, year: str, raw_root: Path
     extracted_text_parts: list[str] = []
 
     for pdf_path in sorted(pdf_paths):
-        pages = read_pdf_pages(pdf_path)
+        pages = extract_pdf_pages(pdf_path)
         pdf_text = "\n\n".join(
             f"[Page {page['page']}] {page['text']}" for page in pages if str(page.get("text", "")).strip()
         )
@@ -521,7 +692,7 @@ def process_report(pdf_paths: list[Path], ticker: str, year: str, raw_root: Path
     text_path = raw_dir / f"{year}.txt"
     text_path.write_text(extracted_text, encoding="utf-8")
 
-    pages = read_pdf_pages(pdf_paths[0]) if pdf_paths else []
+    pages = extract_pdf_pages(pdf_paths[0]) if pdf_paths else []
     chunks = chunk_pages(pages)
     summary_payload: dict[str, Any]
     model_used = "none"

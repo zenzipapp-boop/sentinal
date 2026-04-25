@@ -1,0 +1,107 @@
+{
+  "note": "These are reference URLs for manually downloading policy documents in your browser. Government sites block automated downloads. Open these URLs in Firefox and save to the correct govt_policies/raw/{sector}/ folder.",
+  "sources": [
+    {
+      "sector": "electronics",
+      "policy_name": "PLI Large Scale Electronics",
+      "authority": "MeitY",
+      "suggested_urls": [
+        "https://www.meity.gov.in/static/uploads/2024/02/PLI-Guidelines-Presentation.pdf",
+        "https://www.meity.gov.in/esdm/pli"
+      ],
+      "save_as": "pli_electronics.pdf",
+      "folder": "govt_policies/raw/electronics/"
+    },
+    {
+      "sector": "electronics",
+      "policy_name": "India Semiconductor Mission 2.0",
+      "authority": "MeitY/ISM",
+      "suggested_urls": [
+        "https://static.pib.gov.in/WriteReadData/specificdocs/documents/2026/feb/doc202627782101.pdf",
+        "https://static.pib.gov.in/WriteReadData/specificdocs/documents/2024/nov/doc20241117435901.pdf"
+      ],
+      "save_as": "semiconductor_mission.pdf",
+      "folder": "govt_policies/raw/electronics/"
+    },
+    {
+      "sector": "electronics",
+      "policy_name": "PLI IT Hardware",
+      "authority": "MeitY",
+      "suggested_urls": [
+        "https://www.meity.gov.in/esdm/pliithw"
+      ],
+      "save_as": "pli_it_hardware.pdf",
+      "folder": "govt_policies/raw/electronics/"
+    },
+    {
+      "sector": "banking",
+      "policy_name": "RBI Master Directions NBFC",
+      "authority": "RBI",
+      "suggested_urls": [
+        "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx"
+      ],
+      "save_as": "rbi_nbfc_master_direction.pdf",
+      "folder": "govt_policies/raw/banking/"
+    },
+    {
+      "sector": "infrastructure",
+      "policy_name": "PM Gati Shakti NMP",
+      "authority": "DPIIT",
+      "suggested_urls": [
+        "https://dpiit.gov.in/sites/default/files/pmGatiShaktiNationalMasterPlan.pdf"
+      ],
+      "save_as": "pm_gati_shakti.pdf",
+      "folder": "govt_policies/raw/infrastructure/"
+    },
+    {
+      "sector": "energy",
+      "policy_name": "National Green Hydrogen Mission",
+      "authority": "MNRE",
+      "suggested_urls": [
+        "https://mnre.gov.in/green-hydrogen"
+      ],
+      "save_as": "green_hydrogen_mission.pdf",
+      "folder": "govt_policies/raw/energy/"
+    },
+    {
+      "sector": "auto",
+      "policy_name": "FAME II Scheme",
+      "authority": "Ministry of Heavy Industries",
+      "suggested_urls": [
+        "https://heavyindustries.gov.in/fame-india-phase-ii"
+      ],
+      "save_as": "fame2_scheme.pdf",
+      "folder": "govt_policies/raw/auto/"
+    },
+    {
+      "sector": "pharma",
+      "policy_name": "PLI Pharma",
+      "authority": "Ministry of Chemicals",
+      "suggested_urls": [
+        "https://pharmaceuticals.gov.in/pli-scheme"
+      ],
+      "save_as": "pli_pharma.pdf",
+      "folder": "govt_policies/raw/pharma/"
+    },
+    {
+      "sector": "telecom",
+      "policy_name": "PLI Telecom",
+      "authority": "DoT",
+      "suggested_urls": [
+        "https://dot.gov.in/pli-telecom"
+      ],
+      "save_as": "pli_telecom.pdf",
+      "folder": "govt_policies/raw/telecom/"
+    },
+    {
+      "sector": "it",
+      "policy_name": "DPDP Act 2023",
+      "authority": "MeitY",
+      "suggested_urls": [
+        "https://www.meity.gov.in/data-protection-framework"
+      ],
+      "save_as": "dpdp_act_2023.pdf",
+      "folder": "govt_policies/raw/it/"
+    }
+  ]
+}
