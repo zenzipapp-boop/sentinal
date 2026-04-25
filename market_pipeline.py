@@ -1162,6 +1162,347 @@ def format_peer_comparison(ticker: str, screener_data: dict[str, Any]) -> str:
         return ""
 
 
+def format_ownership_trends(ticker: str, screener_data: dict[str, Any]) -> str:
+    """
+    Format ownership trends from shareholding pattern.
+    Computes QoQ and YoY changes for Promoter, FII, DII, Public holdings.
+    Auto-flags significant changes and trends.
+    """
+    if not isinstance(screener_data, dict):
+        return ""
+
+    shareholding = screener_data.get('shareholding_pattern')
+    if not shareholding or not isinstance(shareholding, dict):
+        return ""
+
+    rows = shareholding.get('rows', [])
+    cols = shareholding.get('columns', [])
+    if not rows or not cols or len(cols) < 3:
+        return ""
+
+    try:
+        output = []
+        output.append("\n  ── OWNERSHIP TRENDS ────────────────────────────")
+
+        # Extract data for each category
+        categories_to_track = ['Promoters', 'FII', 'DII', 'Public']
+        pledge_key = 'Promoter Pledge'
+
+        # Find row for each category
+        data = {}
+        pledge_data = {}
+
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            label = row.get('Unnamed: 0', '')
+            for cat in categories_to_track:
+                if cat in label:
+                    # Extract values for most recent quarters
+                    values = []
+                    for col in cols[1:]:  # Skip "Unnamed: 0"
+                        val = row.get(col, '')
+                        values.append(_safe_float(val))
+                    if values:
+                        data[cat] = values
+                    break
+            if pledge_key in label:
+                values = []
+                for col in cols[1:]:
+                    val = row.get(col, '')
+                    values.append(_safe_float(val))
+                if values:
+                    pledge_data = {'values': values, 'label': label}
+
+        if not data:
+            return ""
+
+        # Process each category
+        for cat in categories_to_track:
+            if cat not in data:
+                continue
+
+            values = data[cat]
+            if len(values) < 2:
+                continue
+
+            # Get current, previous quarter, and one year ago
+            current = values[0]
+            prev_q = values[1] if len(values) > 1 else current
+            yoy = values[4] if len(values) > 4 else current
+
+            qoq_change = current - prev_q
+            yoy_change = current - yoy
+
+            trend_str = f"({current:.1f}% → {prev_q:.1f}% → {yoy:.1f}%)"
+            qoq_str = f"QoQ: {qoq_change:+.1f}%"
+            yoy_str = f"YoY: {yoy_change:+.1f}%"
+
+            # Auto-flag conditions
+            flag = ""
+            if cat == "Promoters":
+                if qoq_change < -2:
+                    flag = " ⚠"
+            elif cat == "FII":
+                if yoy_change < -3:
+                    flag = " ⚠"
+            elif cat == "DII":
+                # Check if DII increasing while FII selling (domestic support)
+                fii_values = data.get("FII", [])
+                if values[0] > values[1] and len(fii_values) > 1 and fii_values[0] < fii_values[1]:
+                    flag = "\n             ↑ domestic support"
+
+            line = f"  {cat:12s}: {current:>5.1f}% | {qoq_str:>10} | {yoy_str:>10}{flag}"
+            output.append(line)
+
+        # Add pledge data
+        if pledge_data:
+            values = pledge_data['values']
+            pledge_val = values[0] if values else 0
+            if pledge_val > 0:
+                pledge_line = f"  Pledge: {pledge_val:.1f}%"
+                if pledge_val > 20:
+                    pledge_line += " ⚠"
+            else:
+                pledge_line = "  Pledge: 0.0% (Clean)"
+            output.append(pledge_line)
+
+        output.append("  ─────────────────────────────────────────────────\n")
+        return "\n".join(output)
+
+    except Exception as e:
+        return ""
+
+
+def fetch_credit_ratings(ticker: str) -> str:
+    """
+    Load and format credit ratings from credit_ratings/{ticker}.json.
+    Returns formatted string or empty string if file not found.
+    """
+    ratings_path = Path("credit_ratings") / f"{ticker}.json"
+
+    if not ratings_path.exists():
+        return ""
+
+    try:
+        with open(ratings_path, 'r', encoding='utf-8') as f:
+            ratings = json.load(f)
+
+        if not isinstance(ratings, dict):
+            return ""
+
+        output = []
+        output.append("\n  ── CREDIT RATINGS ──────────────────────────────")
+
+        # Long-term rating
+        lt_rating = ratings.get('long_term_rating', 'N/A')
+        lt_outlook = ratings.get('long_term_outlook', 'Stable')
+        output.append(f"  Long Term: {lt_rating} ({lt_outlook})")
+
+        # Short-term rating
+        st_rating = ratings.get('short_term_rating', 'N/A')
+        if st_rating != 'N/A':
+            output.append(f"  Short Term: {st_rating}")
+
+        # Last updated
+        last_updated = ratings.get('last_updated', 'N/A')
+        output.append(f"  Last updated: {last_updated}")
+
+        # Recent change from history
+        history = ratings.get('history', [])
+        if history and isinstance(history, list) and len(history) > 1:
+            latest = history[0] if isinstance(history[0], dict) else None
+            previous = history[1] if isinstance(history[1], dict) else None
+
+            if latest and previous:
+                latest_rating = latest.get('rating', 'N/A')
+                previous_rating = previous.get('rating', 'N/A')
+                previous_date = previous.get('date', 'N/A')
+                action = latest.get('action', 'Changed')
+
+                if latest_rating != previous_rating:
+                    output.append(f"  Recent change: {action} from {previous_rating} on {previous_date}")
+
+        output.append("  ─────────────────────────────────────────────────\n")
+        return "\n".join(output)
+
+    except Exception as e:
+        return ""
+
+
+def _load_policy_watchlist() -> dict:
+    watchlist_path = Path("govt_policies/policy_watchlist.json")
+    if not watchlist_path.exists():
+        return {}
+    try:
+        with open(watchlist_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _searxng_raw_query(query: str, searxng_url: str = "http://localhost:8080", max_results: int = 3) -> list[dict]:
+    try:
+        params = {
+            "q": query,
+            "format": "json",
+            "time_range": "month",
+            "categories": "news"
+        }
+        response = requests.post(f"{searxng_url}/search", json=params, timeout=15)
+        if response.status_code != 200:
+            return []
+        data = response.json()
+        results = data.get("results", [])
+        items = []
+        for r in results[:max_results]:
+            items.append({
+                "title": r.get("title", ""),
+                "snippet": r.get("content", "")[:200],
+                "url": r.get("url", ""),
+                "source": r.get("engine", "")
+            })
+        return items
+    except Exception:
+        return []
+
+
+def _fetch_govt_rss_items(search_terms: list[str], max_items: int = 3) -> list[dict]:
+    items = []
+    feeds = [
+        "https://pib.gov.in/RssMain.aspx",
+        "https://rbi.org.in/scripts/rss.aspx?id=3",
+        "https://www.sebi.gov.in/rss/sebi-press-release.xml"
+    ]
+
+    for feed_url in feeds:
+        try:
+            response = requests.get(feed_url, timeout=10)
+            parsed = feedparser.parse(response.content)
+            for entry in parsed.get("entries", []):
+                title = entry.get("title", "")
+                summary = entry.get("summary", "")
+                text_lower = (title + " " + summary).lower()
+
+                if any(term.lower() in text_lower for term in search_terms):
+                    items.append({
+                        "title": title[:100],
+                        "snippet": summary[:200],
+                        "url": entry.get("link", ""),
+                        "source": feed_url.split("/")[2]
+                    })
+                    if len(items) >= max_items:
+                        return items[:max_items]
+        except Exception:
+            continue
+
+    return items[:max_items]
+
+
+def detect_ticker_sectors(ticker: str, screener_data: dict) -> list[str]:
+    watchlist = _load_policy_watchlist()
+    if not watchlist:
+        return []
+
+    text_blob = ""
+    if isinstance(screener_data, dict):
+        text_blob += f" {screener_data.get('sector', '')} "
+        text_blob += f" {screener_data.get('industry', '')} "
+        text_blob += f" {screener_data.get('about', '')} "
+        text_blob += f" {screener_data.get('company_url', '')} "
+    text_blob += f" {ticker} "
+    text_blob_lower = text_blob.lower()
+
+    matching_sectors = []
+    for sector_key, sector_data in watchlist.get("sectors", {}).items():
+        keywords = sector_data.get("keywords", [])
+        if any(kw.lower() in text_blob_lower for kw in keywords):
+            matching_sectors.append(sector_key)
+
+    return matching_sectors
+
+
+def fetch_policy_news(ticker: str, screener_data: dict, searxng_url: str = "http://localhost:8080") -> str:
+    sectors = detect_ticker_sectors(ticker, screener_data)
+    if not sectors:
+        return ""
+
+    cache_key = f"{datetime.now().year}-W{WEEK_NO:02d}"
+    cache_path = Path(f".cache/policy_news/{ticker}_{cache_key}.json")
+
+    if cache_path.exists():
+        try:
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                cached = json.load(f)
+                return cached.get("formatted", "")
+        except Exception:
+            pass
+
+    watchlist = _load_policy_watchlist()
+    all_items = []
+    seen_titles = set()
+
+    for sector in sectors:
+        sector_data = watchlist.get("sectors", {}).get(sector, {})
+        policies = sector_data.get("policies", [])
+
+        for policy in policies:
+            search_terms = policy.get("search_terms", [])
+            for term in search_terms:
+                site_query = f"site:pib.gov.in {term}"
+                results = _searxng_raw_query(site_query, searxng_url, max_results=2)
+
+                if not results:
+                    results = _searxng_raw_query(term, searxng_url, max_results=2)
+
+                if not results:
+                    results = _fetch_govt_rss_items([term], max_items=2)
+
+                for item in results:
+                    title = item.get("title", "")
+                    if title not in seen_titles:
+                        all_items.append(item)
+                        seen_titles.add(title)
+                        if len(all_items) >= 10:
+                            break
+
+                if len(all_items) >= 10:
+                    break
+
+            if len(all_items) >= 10:
+                break
+
+        if len(all_items) >= 10:
+            break
+
+    if not all_items:
+        return ""
+
+    output = []
+    output.append("  ── POLICY & REGULATORY NEWS ────────────────────")
+    for item in all_items[:10]:
+        title = item.get("title", "")
+        snippet = item.get("snippet", "")
+        url = item.get("url", "")
+        if title:
+            output.append(f"  • {title}")
+            if snippet:
+                output.append(f"    {snippet[:150]}")
+            if url:
+                output.append(f"    ({url[:80]})")
+    output.append("  ─────────────────────────────────────────────────\n")
+
+    formatted = "\n".join(output)
+
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(str(cache_path), {"formatted": formatted, "ticker": ticker, "sectors": sectors})
+    except Exception:
+        pass
+
+    return formatted
+
+
 def _escape_json_string_controls(text: str) -> str:
     repaired: list[str] = []
     in_string = False
@@ -2548,9 +2889,14 @@ def run_screener(ticker: str, ohlcv: dict, news: list, fundamentals: dict, *,
     model = _stage_model(category, 1)
     template = _stage_prompt_template(category, 1) or SCREENER_PROMPT
     log.info(f"[{ticker}] Stage 1 — Quality Screener ({model}) …")
-    news_text = "\n".join(f"• {n['title']}: {n['snippet']}" for n in news[:8])
+    company_news_bullets = "\n".join(f"• {n['title']}: {n['snippet']}" for n in news[:8])
+    policy_section = fundamentals.get("policy_news_formatted", "") if isinstance(fundamentals, dict) else ""
+    if policy_section:
+        news_text = f"=== COMPANY NEWS ===\n{company_news_bullets}\n\n=== POLICY & REGULATORY NEWS ===\n{policy_section}"
+    else:
+        news_text = company_news_bullets
 
-    # Build fund_text with quantitative scores and peer comparison
+    # Build fund_text with quantitative scores, peer comparison, ownership trends, and credit ratings
     fund_parts = []
     if fundamentals:
         # Add quantitative scores if available
@@ -2559,6 +2905,12 @@ def run_screener(ticker: str, ohlcv: dict, news: list, fundamentals: dict, *,
         # Add peer comparison if available
         if "peer_comparison_formatted" in fundamentals:
             fund_parts.append(fundamentals["peer_comparison_formatted"])
+        # Add ownership trends if available
+        if "ownership_trends_formatted" in fundamentals:
+            fund_parts.append(fundamentals["ownership_trends_formatted"])
+        # Add credit ratings if available
+        if "credit_ratings_formatted" in fundamentals:
+            fund_parts.append(fundamentals["credit_ratings_formatted"])
         # Add the rest of the fundamentals as JSON
         remaining_fund = {k: v for k, v in fundamentals.items() if not k.endswith("_formatted")}
         if remaining_fund:
@@ -2658,9 +3010,14 @@ def run_thesis(ticker: str, ohlcv: dict, screener: dict,
     model = _stage_model(category, 2)
     template = _stage_prompt_template(category, 2) or THESIS_PROMPT
     log.info(f"[{ticker}] Stage 2 — Thesis Writer ({model}) …")
-    news_text = "\n".join(f"• {n['title']}: {n['snippet']}" for n in news[:6])
+    company_news_bullets = "\n".join(f"• {n['title']}: {n['snippet']}" for n in news[:6])
+    policy_section = fundamentals.get("policy_news_formatted", "") if isinstance(fundamentals, dict) else ""
+    if policy_section:
+        news_text = f"=== COMPANY NEWS ===\n{company_news_bullets}\n\n=== POLICY & REGULATORY NEWS ===\n{policy_section}"
+    else:
+        news_text = company_news_bullets
 
-    # Build fund_text with quantitative scores and peer comparison
+    # Build fund_text with quantitative scores, peer comparison, ownership trends, and credit ratings
     fund_parts = []
     if fundamentals:
         # Add quantitative scores if available
@@ -2669,6 +3026,12 @@ def run_thesis(ticker: str, ohlcv: dict, screener: dict,
         # Add peer comparison if available
         if "peer_comparison_formatted" in fundamentals:
             fund_parts.append(fundamentals["peer_comparison_formatted"])
+        # Add ownership trends if available
+        if "ownership_trends_formatted" in fundamentals:
+            fund_parts.append(fundamentals["ownership_trends_formatted"])
+        # Add credit ratings if available
+        if "credit_ratings_formatted" in fundamentals:
+            fund_parts.append(fundamentals["credit_ratings_formatted"])
         # Add the rest of the fundamentals as JSON
         remaining_fund = {k: v for k, v in fundamentals.items() if not k.endswith("_formatted")}
         if remaining_fund:
@@ -2817,14 +3180,23 @@ def run_auditor(ticker: str, ohlcv: dict, sat: dict,
         indent=2,
     ) if prior_audits else "No prior audits — first run."
 
-    news_text = "\n".join(f"• {n['title']}: {n['snippet']}" for n in news[:6])
+    company_news_bullets = "\n".join(f"• {n['title']}: {n['snippet']}" for n in news[:6])
+    policy_section = fundamentals.get("policy_news_formatted", "") if isinstance(fundamentals, dict) else ""
+    if policy_section:
+        news_text = f"=== COMPANY NEWS ===\n{company_news_bullets}\n\n=== POLICY & REGULATORY NEWS ===\n{policy_section}"
+    else:
+        news_text = company_news_bullets
 
-    # Build fundamentals text with quantitative scores and peer comparison
+    # Build fundamentals text with quantitative scores, peer comparison, ownership trends, and credit ratings
     fund_parts = []
     if "quantitative_scores_formatted" in fundamentals:
         fund_parts.append(fundamentals["quantitative_scores_formatted"])
     if "peer_comparison_formatted" in fundamentals:
         fund_parts.append(fundamentals["peer_comparison_formatted"])
+    if "ownership_trends_formatted" in fundamentals:
+        fund_parts.append(fundamentals["ownership_trends_formatted"])
+    if "credit_ratings_formatted" in fundamentals:
+        fund_parts.append(fundamentals["credit_ratings_formatted"])
     fund_parts.append(_compact_json(
         {
             "screener_source": screener.get("source") if isinstance(screener, dict) else None,
@@ -4410,6 +4782,15 @@ async def run_pipeline(watchlist: list[str], searxng_url: str, *, show_live: boo
                 peer_comparison = format_peer_comparison(ticker, fundamentals)
                 if peer_comparison.strip():
                     fundamentals["peer_comparison_formatted"] = peer_comparison
+                ownership_trends = format_ownership_trends(ticker, fundamentals)
+                if ownership_trends.strip():
+                    fundamentals["ownership_trends_formatted"] = ownership_trends
+                credit_ratings = fetch_credit_ratings(ticker)
+                if credit_ratings.strip():
+                    fundamentals["credit_ratings_formatted"] = credit_ratings
+                policy_news = fetch_policy_news(ticker, fundamentals, searxng_url)
+                if policy_news.strip():
+                    fundamentals["policy_news_formatted"] = policy_news
             prior_sat = satellites.get(ticker, {})
             _ar_str = prior_sat.get("annual_report_path", "") if isinstance(prior_sat, dict) else ""
             ar_path: Path | None = Path(_ar_str) if _ar_str and Path(_ar_str).exists() else None
@@ -4716,6 +5097,11 @@ Examples:
         action="store_true",
         help="Open the Browser Use live preview URL when one is available",
     )
+    parser.add_argument(
+        "--policy-sectors",
+        metavar="TICKER",
+        help="Print detected sectors and policies for the given ticker and exit"
+    )
     return parser
 
 
@@ -4738,6 +5124,20 @@ async def main_async() -> None:
         return
     if args.screener:
         await cmd_screener(args.screener, show_live=args.browser_live or BROWSER_USE_SHOW_LIVE)
+        return
+    if args.policy_sectors:
+        ticker = args.policy_sectors
+        data_path = SCREENER_DIR / f"{ticker}.json"
+        sd = _load_json_file(data_path, {}) if data_path.exists() else {}
+        sectors = detect_ticker_sectors(ticker, sd)
+        if not sectors:
+            print(f"No matching sectors found for {ticker}")
+        else:
+            wl = _load_policy_watchlist()
+            for s in sectors:
+                print(f"\n[{s}]")
+                for p in wl.get("sectors", {}).get(s, {}).get("policies", []):
+                    print(f"  {p['short_name']} ({p['authority']}): {', '.join(p['search_terms'])}")
         return
 
     if args.watchlist is not None:

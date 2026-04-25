@@ -1,0 +1,181 @@
+{
+  "sectors": {
+    "electronics": {
+      "keywords": ["Dixon Technologies", "EMS", "electronics manufacturing"],
+      "policies": [
+        {
+          "name": "PLI Scheme for Large Scale Electronics Manufacturing",
+          "short_name": "PLI Electronics",
+          "authority": "MeitY",
+          "search_terms": ["PLI electronics MeitY", "PLI mobile manufacturing India"]
+        },
+        {
+          "name": "Semiconductor Mission India",
+          "short_name": "Semicon Mission",
+          "authority": "MeitY",
+          "search_terms": ["India semiconductor mission", "semicon India policy 2025"]
+        },
+        {
+          "name": "PLI IT Hardware",
+          "short_name": "PLI IT Hardware",
+          "authority": "MeitY",
+          "search_terms": ["PLI IT hardware India", "laptop tablet PLI scheme"]
+        }
+      ]
+    },
+    "banking": {
+      "keywords": ["bank", "NBFC", "financial services", "lending"],
+      "policies": [
+        {
+          "name": "RBI Monetary Policy",
+          "short_name": "RBI MPC",
+          "authority": "RBI",
+          "search_terms": ["RBI monetary policy repo rate 2025", "RBI MPC decision"]
+        },
+        {
+          "name": "RBI NBFC Regulations",
+          "short_name": "RBI NBFC",
+          "authority": "RBI",
+          "search_terms": ["RBI NBFC circular 2025", "RBI shadow banking regulation"]
+        },
+        {
+          "name": "Priority Sector Lending",
+          "short_name": "PSL",
+          "authority": "RBI",
+          "search_terms": ["RBI priority sector lending norms", "PSL targets India"]
+        }
+      ]
+    },
+    "infrastructure": {
+      "keywords": ["construction", "EPC", "roads", "railways", "cement", "steel", "engineering"],
+      "policies": [
+        {
+          "name": "National Infrastructure Pipeline",
+          "short_name": "NIP",
+          "authority": "DEA",
+          "search_terms": ["National Infrastructure Pipeline India 2025", "NIP capex India"]
+        },
+        {
+          "name": "PM Gati Shakti",
+          "short_name": "Gati Shakti",
+          "authority": "Ministry of Commerce",
+          "search_terms": ["PM Gati Shakti update 2025", "Gati Shakti NMP"]
+        }
+      ]
+    },
+    "pharma": {
+      "keywords": ["pharma", "pharmaceutical", "drug", "healthcare", "hospital"],
+      "policies": [
+        {
+          "name": "PLI Pharma",
+          "short_name": "PLI Pharma",
+          "authority": "Ministry of Chemicals",
+          "search_terms": ["PLI pharma scheme India 2025", "API PLI scheme"]
+        },
+        {
+          "name": "National Medical Devices Policy",
+          "short_name": "Med Devices Policy",
+          "authority": "Ministry of Health",
+          "search_terms": ["India medical devices policy 2025", "medical devices PLI India"]
+        }
+      ]
+    },
+    "auto": {
+      "keywords": ["automobile", "auto", "EV", "electric vehicle", "ancillary"],
+      "policies": [
+        {
+          "name": "FAME III",
+          "short_name": "FAME III",
+          "authority": "Ministry of Heavy Industries",
+          "search_terms": ["FAME III India EV subsidy 2025", "EV policy India 2025"]
+        },
+        {
+          "name": "PLI Auto",
+          "short_name": "PLI Auto",
+          "authority": "Ministry of Heavy Industries",
+          "search_terms": ["PLI automobile India 2025", "PLI auto component"]
+        },
+        {
+          "name": "Vehicle Scrappage Policy",
+          "short_name": "Scrappage",
+          "authority": "Ministry of Road Transport",
+          "search_terms": ["vehicle scrappage policy India 2025"]
+        }
+      ]
+    },
+    "telecom": {
+      "keywords": ["telecom", "telecom equipment", "5G", "tower"],
+      "policies": [
+        {
+          "name": "PLI Telecom",
+          "short_name": "PLI Telecom",
+          "authority": "DoT",
+          "search_terms": ["PLI telecom equipment India 2025", "DoT PLI scheme"]
+        },
+        {
+          "name": "5G Rollout Policy",
+          "short_name": "5G Policy",
+          "authority": "DoT/TRAI",
+          "search_terms": ["India 5G rollout update 2025", "TRAI 5G spectrum"]
+        }
+      ]
+    },
+    "energy": {
+      "keywords": ["power", "renewable", "solar", "wind", "energy"],
+      "policies": [
+        {
+          "name": "National Solar Mission",
+          "short_name": "Solar Mission",
+          "authority": "MNRE",
+          "search_terms": ["India solar mission target 2025", "MNRE solar policy"]
+        },
+        {
+          "name": "Electricity Amendment Act",
+          "short_name": "Electricity Act",
+          "authority": "Ministry of Power",
+          "search_terms": ["Electricity Amendment Act India 2025", "power sector reform India"]
+        },
+        {
+          "name": "Green Hydrogen Mission",
+          "short_name": "Green H2",
+          "authority": "MNRE",
+          "search_terms": ["India green hydrogen mission 2025", "NGHM update"]
+        }
+      ]
+    },
+    "it": {
+      "keywords": ["IT", "software", "technology", "SaaS", "cloud"],
+      "policies": [
+        {
+          "name": "Digital India",
+          "short_name": "Digital India",
+          "authority": "MeitY",
+          "search_terms": ["Digital India program update 2025", "MeitY digital initiative"]
+        },
+        {
+          "name": "Data Protection Act",
+          "short_name": "DPDP Act",
+          "authority": "MeitY",
+          "search_terms": ["DPDP Act India 2025 update", "India data protection rules"]
+        }
+      ]
+    },
+    "fmcg": {
+      "keywords": ["FMCG", "consumer goods", "food", "beverages", "retail"],
+      "policies": [
+        {
+          "name": "FDI in Retail",
+          "short_name": "FDI Retail",
+          "authority": "DPIIT",
+          "search_terms": ["FDI retail policy India 2025", "DPIIT retail FDI"]
+        },
+        {
+          "name": "Food Safety Standards",
+          "short_name": "FSSAI",
+          "authority": "FSSAI",
+          "search_terms": ["FSSAI regulation update 2025", "food safety India"]
+        }
+      ]
+    }
+  }
+}
