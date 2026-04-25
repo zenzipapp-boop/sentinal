@@ -397,11 +397,19 @@ def generate_with_fallback(
 
 
 def summarize_chunk(ticker: str, report_name: str, chunk: dict[str, Any], models: list[str]) -> dict[str, Any]:
+    # Parse fiscal year from report_name (e.g., "fy20" = April 2019 to March 2020)
+    fy_num = report_name[2:] if report_name.lower().startswith('fy') else report_name
+    fy_clarification = f"April 20{int(fy_num)-1} to March 20{fy_num}" if fy_num.isdigit() and int(fy_num) > 0 else "unspecified period"
+
     prompt = f"""You are a Forensic Equity Auditor extracting structured notes from an annual report.
+
+*** FISCAL YEAR: {report_name.upper()} ({fy_clarification}) ***
 
 Company: {ticker}
 Report: {report_name}
 Pages: {chunk['page_start']} to {chunk['page_end']}
+
+IMPORTANT: The fiscal year label (e.g., {report_name.upper()}) does NOT refer to a calendar year. {report_name.upper()} means the financial period ending in March 20{fy_num}. Do not confuse the fiscal year number with calendar years mentioned in the document text.
 
 Do not just summarize; investigate. Look for gaps between management's promises and the Notes to Accounts. If a number looks unusual compared to prior context, flag it as a Discrepancy.
 
@@ -431,19 +439,37 @@ Return valid JSON only:
 
 
 def summarize_report(ticker: str, report_name: str, chunk_summaries: list[dict[str, Any]], models: list[str], prior_baseline: dict[str, Any] | None = None) -> dict[str, Any]:
+    # Parse fiscal year from report_name (e.g., "fy20" = April 2019 to March 2020)
+    fy_num = report_name[2:] if report_name.lower().startswith('fy') else report_name
+    fy_clarification = f"April 20{int(fy_num)-1} to March 20{fy_num}" if fy_num.isdigit() and int(fy_num) > 0 else "unspecified period"
+
     prior_section = ""
     if prior_baseline:
-        prior_section = f"""
-PRIOR YEAR FINANCIALS (FY{int(report_name[2:]) - 1 if report_name.startswith('FY') else 'N/A'}):
+        prior_fy = int(fy_num) - 1 if fy_num.isdigit() else "N/A"
+        if isinstance(prior_fy, int):
+            prior_fy_text = f"FY{prior_fy}"
+            prior_section = f"""
+PRIOR YEAR FINANCIALS ({prior_fy_text} = April 20{prior_fy-1} to March 20{prior_fy}):
 {json.dumps(prior_baseline, indent=2, ensure_ascii=False)}
 
 Using these prior year numbers compute exact YoY changes for all key financial metrics. Express as absolute change and percentage change. Flag any metric that deteriorated significantly.
 """
+        else:
+            prior_section = f"""
+PRIOR YEAR FINANCIALS (N/A — fiscal year could not be determined):
+{json.dumps(prior_baseline, indent=2, ensure_ascii=False)}
+
+Using these baseline numbers compute exact changes for key financial metrics where available.
+"""
 
     prompt = f"""You are a Forensic Equity Auditor synthesizing annual-report chunks into a comprehensive investor thesis.
 
+*** FISCAL YEAR: {report_name.upper()} ({fy_clarification}) ***
+
 Company: {ticker}
 Report: {report_name}
+
+IMPORTANT: The fiscal year label (e.g., {report_name.upper()}) does NOT refer to a calendar year. {report_name.upper()} means the financial period ending in March 20{fy_num}. Do not confuse the fiscal year number with any year numbers mentioned in the document text (e.g., "2020" or "2019" in text refers to calendar years, not fiscal years).
 {prior_section}
 
 Investigate discrepancies between management claims and actual results. Cross-reference numbers across sections. Flag inconsistencies.
@@ -574,8 +600,14 @@ def process_report(pdf_paths: list[Path], ticker: str, year: str, raw_root: Path
     # Load prior year baseline for YoY comparison
     baseline_path = ticker_dir / "baselines.json"
     baselines = load_baseline(baseline_path)
-    prior_year = f"fy{int(year[2:]) - 1}"
-    prior_baseline = baselines.get(prior_year, {}) if not skip_llm else None
+    prior_baseline = None
+    if not skip_llm and year.lower().startswith('fy') and len(year) > 2:
+        try:
+            year_num = int(year[2:])
+            prior_year = f"fy{year_num - 1}"
+            prior_baseline = baselines.get(prior_year, {})
+        except (ValueError, IndexError):
+            prior_baseline = None
 
     if skip_llm:
         summary_payload = {
