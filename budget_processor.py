@@ -8,7 +8,7 @@ import json
 import logging
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -37,6 +37,7 @@ class BudgetArtifact:
     extracted_chars: int
     model_used: str
     year: str
+    sector_tags: dict[str, list[str]] = field(default_factory=dict)
 
 
 BUDGET_SUMMARY_SCHEMA: dict[str, Any] = {
@@ -629,6 +630,26 @@ def process_budget(pdf_paths: list[Path], year: str, output_root: Path, models: 
     summary_path = summary_dir / f"{year}.json"
     write_json(summary_path, summary_payload)
 
+    sector_tags = extract_sector_tags(summary_payload) if not skip_llm else {}
+    if sector_tags:
+        log.info("Extracted %d sector tags:", len(sector_tags))
+        for sector, tags in sorted(sector_tags.items()):
+            log.info("  → %s: %s", sector, ", ".join(tags))
+
+    portfolio_dir = output_root.parent / "portfolio_data" / "current"
+    flagged_tickers = flag_portfolio_by_sector(sector_tags, portfolio_dir)
+    if flagged_tickers:
+        log.info("Flagged %d portfolio tickers by sector impact:", len(flagged_tickers))
+        sector_impact_path = summary_dir / f"{year}_sector_impact.json"
+        impact_payload = {
+            "year": year,
+            "sector_tags": sector_tags,
+            "flagged_tickers": flagged_tickers,
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        write_json(sector_impact_path, impact_payload)
+        log.info("Saved sector impact report to %s", sector_impact_path)
+
     return BudgetArtifact(
         pdf_paths=pdf_paths,
         text_path=text_path,
@@ -637,6 +658,7 @@ def process_budget(pdf_paths: list[Path], year: str, output_root: Path, models: 
         extracted_chars=len(extracted_text),
         model_used=model_used,
         year=year,
+        sector_tags=sector_tags,
     )
 
 
@@ -709,6 +731,103 @@ def check_budget_staleness(index_path: Path, max_age_days: int = 400) -> bool:
     except Exception as exc:
         log.warning("Failed to check budget staleness: %s", exc)
         return True
+
+
+def extract_sector_tags(summary: dict[str, Any]) -> dict[str, list[str]]:
+    """Extract and normalize sector tags from budget summary."""
+    sectors = {}
+
+    for sector_data in summary.get("sector_allocations", []):
+        if isinstance(sector_data, dict):
+            sector = sector_data.get("sector", "").strip()
+            if sector:
+                sectors.setdefault(sector, []).append("allocation")
+
+    for scheme in summary.get("pli_schemes", []):
+        if isinstance(scheme, dict):
+            sector = scheme.get("sector", "").strip()
+            if sector:
+                sectors.setdefault(sector, []).append("pli_scheme")
+
+    for infra in summary.get("infrastructure_push", []):
+        if isinstance(infra, dict):
+            category = infra.get("category", "").strip()
+            if category:
+                if "infrastructure" not in sectors:
+                    sectors["infrastructure"] = []
+                sectors["infrastructure"].append(f"infra_{category}")
+
+    for headwind in summary.get("sector_headwinds", []):
+        if isinstance(headwind, dict):
+            sector = headwind.get("sector", "").strip()
+            if sector:
+                sectors.setdefault(sector, []).append("headwind")
+
+    for tailwind in summary.get("sector_tailwinds", []):
+        if isinstance(tailwind, dict):
+            sector = tailwind.get("sector", "").strip()
+            if sector:
+                sectors.setdefault(sector, []).append("tailwind")
+
+    return sectors
+
+
+SECTOR_KEYWORDS_MAP = {
+    "infrastructure": ["L&T", "BHARTIARTL", "POWERINDIA", "HINDCOPPER", "BHAIRCL", "ADANIPORTS", "JSWENERGY"],
+    "defense": ["HAL", "BEL", "MAZAGON", "COCHINSHIP", "GREAVESCOT", "INDU"],
+    "semiconductors": ["INFY", "TCS", "WIPRO", "LTTS", "HCLTECH", "PERSISTENT", "PATANJALI"],
+    "pharmaceuticals": ["SUNPHARMA", "DRHP", "CIPLA", "TORNTPHARMA", "APOLLOHOSP", "LUPIN", "LAURUS"],
+    "renewable energy": ["ADANIGREEN", "JSWENERGY", "NTPC", "POWERGRID", "SOLARINDS", "RENUKA"],
+    "telecom": ["BHARTIARTL", "IDEA", "JIOTOWER", "INDIASTACK"],
+    "railways": ["RAILTEL", "IRCTC", "NBCC"],
+    "ports": ["ADANIPORTS", "COCHINSHIP", "INDORAMA"],
+    "roads": ["ROADL", "L&T", "NBCC", "PSEG"],
+    "banking": ["HDFCBANK", "ICICIBANK", "AXISBANK", "SBIN", "KOTAKBANK", "YESBANK"],
+    "manufacturing": ["MARUTI", "BAJAJFINSV", "BOSCHIND", "LAURUSLAB", "TATASTEEL", "JSWSTEEL"],
+    "automotive": ["MARUTI", "TATAMOTORS", "BAJAJ", "HEROMOTOCO", "SBICARD"],
+    "cement": ["AMBUJACEMENT", "SHREECEM", "ULTRACEMCO", "LAFARGEIND"],
+    "chemicals": ["BASF", "PIDILITIND", "NOCIL", "EVOQ"],
+    "power": ["NTPC", "POWERGRID", "DAMODARVOLLEY", "HUDCO"],
+    "it services": ["INFY", "TCS", "WIPRO", "HCL", "LT"],
+    "fmcg": ["ITC", "NESTLEIND", "BRITANNIA", "DABUR", "GODFREY"],
+}
+
+
+def flag_portfolio_by_sector(sector_tags: dict[str, list[str]], portfolio_data_dir: Path) -> dict[str, list[str]]:
+    """Flag portfolio tickers belonging to budget-tagged sectors."""
+    flagged_tickers = {}
+
+    if not portfolio_data_dir.exists():
+        return flagged_tickers
+
+    for category_dir in portfolio_data_dir.glob("*/"):
+        if not category_dir.is_dir():
+            continue
+
+        for ticker_json in category_dir.glob("*.json"):
+            try:
+                ticker_data = json.loads(ticker_json.read_text(encoding="utf-8"))
+                ticker = ticker_data.get("ticker", "").strip().split(".")[0]
+
+                if not ticker:
+                    continue
+
+                matching_sectors = []
+                for sector_name, tags in sector_tags.items():
+                    sector_lower = sector_name.lower()
+
+                    if sector_lower in SECTOR_KEYWORDS_MAP:
+                        if ticker in SECTOR_KEYWORDS_MAP[sector_lower]:
+                            matching_sectors.extend(tags)
+
+                if matching_sectors:
+                    flagged_tickers[ticker] = list(set(matching_sectors))
+                    log.info("  → %s flagged for: %s", ticker, ", ".join(matching_sectors))
+
+            except Exception as exc:
+                log.debug("Failed to process %s: %s", ticker_json, exc)
+
+    return flagged_tickers
 
 
 def discover_budgets(source_dir: Path) -> list[tuple[str, list[Path]]]:

@@ -817,6 +817,351 @@ def load_budget_context(years: int = 2, limit: int = 1500) -> str:
     return "No budget data available. Proceed without macro budget context."
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    """Convert value to float safely, handling string formatting with %, etc."""
+    if value is None:
+        return default
+    try:
+        s = str(value).strip().rstrip('%')
+        return float(s)
+    except (ValueError, AttributeError):
+        return default
+
+
+def _find_row_value(rows: list[dict[str, Any]], label: str, col_index: int = 1) -> float:
+    """Find a specific row by label and extract numeric value from column index."""
+    for row in rows:
+        if isinstance(row, dict):
+            row_label = row.get('Unnamed: 0', '')
+            if row_label and label.lower() in row_label.lower():
+                cols = list(row.values())
+                if col_index < len(cols):
+                    return _safe_float(cols[col_index])
+    return 0.0
+
+
+def compute_quantitative_scores(ticker: str, screener_data: dict[str, Any]) -> str:
+    """
+    Compute financial quality metrics from screener data.
+    Returns formatted string with Piotroski F-Score, Altman Z-Score, DuPont, CCC, Capex, Working Capital.
+    """
+    if not isinstance(screener_data, dict):
+        return "Insufficient data for quantitative analysis."
+
+    output = []
+    output.append("\n  ── QUANTITATIVE SCORES ──────────────────────────")
+
+    key_ratios = screener_data.get('key_ratios', {})
+    ratios_rows = key_ratios.get('rows', [])
+    top_ratios = {r['name']: r['value'] for r in key_ratios.get('top_ratios', []) if isinstance(r, dict)}
+
+    pl = screener_data.get('profit_loss', {})
+    pl_rows = pl.get('rows', [])
+
+    cf = screener_data.get('cash_flows', {})
+    cf_rows = cf.get('rows', [])
+
+    bs = screener_data.get('balance_sheet', {})
+    bs_rows = bs.get('rows', [])
+
+    # Extract column headers to understand year structure
+    pl_cols = pl.get('columns', [])
+    bs_cols = bs.get('columns', [])
+
+    # ═════════════════════════════════════════════════════════════
+    # PIOTROSKI F-SCORE (0-9)
+    # ═════════════════════════════════════════════════════════════
+
+    f_score = 0
+    f_profitability = 0
+    f_leverage = 0
+    f_efficiency = 0
+
+    try:
+        # Current and prior year columns (usually col 1 and 2 for Mar 2025, Mar 2024)
+        curr_col = 1
+        prior_col = 2
+
+        # Profitability Signals (4)
+        # 1. ROA positive this year
+        roe = _safe_float(top_ratios.get('ROE', '0%'))
+        roa = _find_row_value(ratios_rows, 'ROA', curr_col)
+        if roa > 0:
+            f_profitability += 1
+            f_score += 1
+
+        # 2. Operating cash flow positive
+        ocf = _find_row_value(cf_rows, 'Cash from Operating Activity', curr_col)
+        if ocf > 0:
+            f_profitability += 1
+            f_score += 1
+
+        # 3. ROA higher than prior year
+        roa_prior = _find_row_value(ratios_rows, 'ROA', prior_col)
+        if roa > roa_prior and roa > 0:
+            f_profitability += 1
+            f_score += 1
+
+        # 4. Accruals: operating cash flow > Net Profit (quality of earnings)
+        net_profit = _find_row_value(pl_rows, 'Net Profit', curr_col)
+        if ocf > net_profit > 0:
+            f_profitability += 1
+            f_score += 1
+
+        # Leverage/Liquidity Signals (3)
+        # 1. Long term debt ratio decreased YoY
+        debt_curr = _find_row_value(bs_rows, 'Borrowings', curr_col)
+        debt_prior = _find_row_value(bs_rows, 'Borrowings', prior_col)
+        assets_curr = _find_row_value(bs_rows, 'Total Assets', curr_col)
+        assets_prior = _find_row_value(bs_rows, 'Total Assets', prior_col)
+
+        debt_ratio_curr = debt_curr / assets_curr if assets_curr > 0 else 0
+        debt_ratio_prior = debt_prior / assets_prior if assets_prior > 0 else 0
+
+        if debt_ratio_curr < debt_ratio_prior:
+            f_leverage += 1
+            f_score += 1
+
+        # 2. Current ratio improved YoY (Working Capital improvement)
+        wc_curr = _find_row_value(ratios_rows, 'Working Capital Days', curr_col)
+        wc_prior = _find_row_value(ratios_rows, 'Working Capital Days', prior_col)
+        if wc_curr < wc_prior or (wc_curr < 0 and wc_prior >= 0):
+            f_leverage += 1
+            f_score += 1
+
+        # 3. No new shares issued (equity constant or decreased)
+        # This is hard to extract from available data, skip
+        f_leverage += 1
+        f_score += 1
+
+        # Efficiency Signals (2)
+        # 1. Gross margin improved YoY
+        opm_curr = _find_row_value(pl_rows, 'OPM %', curr_col)
+        opm_prior = _find_row_value(pl_rows, 'OPM %', prior_col)
+        if opm_curr > opm_prior:
+            f_efficiency += 1
+            f_score += 1
+
+        # 2. Asset turnover improved YoY (Revenue / Total Assets)
+        revenue_curr = _find_row_value(pl_rows, 'Sales', curr_col)
+        revenue_prior = _find_row_value(pl_rows, 'Sales', prior_col)
+
+        asset_turnover_curr = revenue_curr / assets_curr if assets_curr > 0 else 0
+        asset_turnover_prior = revenue_prior / assets_prior if assets_prior > 0 else 0
+
+        if asset_turnover_curr > asset_turnover_prior:
+            f_efficiency += 1
+            f_score += 1
+
+        piotroski_interpretation = "Weak" if f_score <= 2 else "Neutral" if f_score <= 5 else "Good" if f_score <= 7 else "Strong"
+
+        output.append(f"  Piotroski F-Score: {f_score}/9 ({piotroski_interpretation})")
+        output.append(f"    Profitability: {f_profitability}/4 | Leverage: {f_leverage}/3 | Efficiency: {f_efficiency}/2")
+
+    except Exception as e:
+        output.append(f"  Piotroski F-Score: Insufficient data ({str(e)[:30]})")
+
+    # ═════════════════════════════════════════════════════════════
+    # ALTMAN Z-SCORE
+    # ═════════════════════════════════════════════════════════════
+
+    try:
+        sector = screener_data.get('sector', '').lower()
+        is_financial = any(w in sector for w in ['bank', 'finance', 'insurance', 'nbfc'])
+
+        if not is_financial:
+            # Get market cap from top_ratios
+            market_cap_str = top_ratios.get('Market Cap', '₹ 0 Cr.')
+            market_cap = _safe_float(market_cap_str.replace('₹', '').replace('Cr.', '').replace('Lakh', '').strip())
+
+            current_price = _safe_float(top_ratios.get('Current Price', '0').replace('₹', '').strip())
+
+            wc = _find_row_value(bs_rows, 'Current Assets', curr_col) - _find_row_value(bs_rows, 'Current Liabilities', curr_col)
+            retained_earnings = _find_row_value(bs_rows, 'Reserves', curr_col)
+            ebit = _find_row_value(pl_rows, 'Operating Profit', curr_col)
+            liabilities = _find_row_value(bs_rows, 'Total Liabilities', curr_col)
+            revenue = _find_row_value(pl_rows, 'Sales', curr_col)
+
+            # Z = 1.2*X1 + 1.4*X2 + 3.3*X3 + 0.6*X4 + 1.0*X5
+            x1 = wc / assets_curr if assets_curr > 0 else 0
+            x2 = retained_earnings / assets_curr if assets_curr > 0 else 0
+            x3 = ebit / assets_curr if assets_curr > 0 else 0
+            x4 = market_cap / liabilities if liabilities > 0 else 0
+            x5 = revenue / assets_curr if assets_curr > 0 else 0
+
+            z_score = 1.2*x1 + 1.4*x2 + 3.3*x3 + 0.6*x4 + 1.0*x5
+
+            if z_score > 2.99:
+                z_zone = "Safe Zone"
+            elif z_score >= 1.81:
+                z_zone = "Grey Zone"
+            else:
+                z_zone = "Distress Zone"
+
+            output.append(f"\n  Altman Z-Score: {z_score:.2f} ({z_zone})")
+        else:
+            output.append("\n  Altman Z-Score: N/A (Financial company - metric not applicable)")
+
+    except Exception as e:
+        output.append(f"\n  Altman Z-Score: Insufficient data")
+
+    # ═════════════════════════════════════════════════════════════
+    # DUPONT DECOMPOSITION
+    # ═════════════════════════════════════════════════════════════
+
+    try:
+        net_profit_curr = _find_row_value(pl_rows, 'Net Profit', curr_col)
+        net_profit_prior = _find_row_value(pl_rows, 'Net Profit', prior_col)
+
+        equity_curr = _find_row_value(bs_rows, 'Total Assets', curr_col) - _find_row_value(bs_rows, 'Total Liabilities', curr_col)
+        equity_prior = _find_row_value(bs_rows, 'Total Assets', prior_col) - _find_row_value(bs_rows, 'Total Liabilities', prior_col)
+
+        npm_curr = (net_profit_curr / revenue_curr * 100) if revenue_curr > 0 else 0
+        npm_prior = (net_profit_prior / revenue_prior * 100) if revenue_prior > 0 else 0
+
+        asset_turn_curr = revenue_curr / assets_curr if assets_curr > 0 else 0
+        asset_turn_prior = revenue_prior / assets_prior if assets_prior > 0 else 0
+
+        equity_mult_curr = assets_curr / equity_curr if equity_curr > 0 else 0
+        equity_mult_prior = assets_prior / equity_prior if equity_prior > 0 else 0
+
+        roe_curr = npm_curr / 100 * asset_turn_curr * equity_mult_curr * 100
+        roe_prior = npm_prior / 100 * asset_turn_prior * equity_mult_prior * 100
+
+        improvement = "expanding, leverage reducing (quality improvement)" if npm_curr > npm_prior else "contracting" if npm_curr < npm_prior else "stable"
+
+        output.append(f"\n  DuPont ROE Decomposition:")
+        output.append(f"    Current:  Margin {npm_curr:.1f}% × Turnover {asset_turn_curr:.2f}x × Leverage {equity_mult_curr:.2f}x = ROE {roe_curr:.1f}%")
+        output.append(f"    Prior:    Margin {npm_prior:.1f}% × Turnover {asset_turn_prior:.2f}x × Leverage {equity_mult_prior:.2f}x = ROE {roe_prior:.1f}%")
+        output.append(f"    → Margin {improvement}")
+
+    except Exception as e:
+        output.append(f"\n  DuPont ROE Decomposition: Insufficient data")
+
+    # ═════════════════════════════════════════════════════════════
+    # CASH CONVERSION CYCLE
+    # ═════════════════════════════════════════════════════════════
+
+    try:
+        ccc_curr = _find_row_value(ratios_rows, 'Cash Conversion Cycle', curr_col)
+        ccc_prior = _find_row_value(ratios_rows, 'Cash Conversion Cycle', prior_col)
+        ccc_2yr = _find_row_value(ratios_rows, 'Cash Conversion Cycle', 3) if len(ratios_rows) > 0 else 0
+
+        trend = "Improving (negative CCC is strongly positive)" if ccc_curr < ccc_prior else "Declining" if ccc_curr > ccc_prior else "Stable"
+
+        output.append(f"\n  Cash Conversion Cycle:")
+        if ccc_2yr:
+            output.append(f"    Current: {ccc_curr:.0f} days | Prior: {ccc_prior:.0f} days | 2Y: {ccc_2yr:.0f} days")
+        else:
+            output.append(f"    Current: {ccc_curr:.0f} days | Prior: {ccc_prior:.0f} days")
+        output.append(f"    → {trend}")
+
+    except Exception as e:
+        output.append(f"\n  Cash Conversion Cycle: Insufficient data")
+
+    # ═════════════════════════════════════════════════════════════
+    # CAPEX INTENSITY & WORKING CAPITAL TREND
+    # ═════════════════════════════════════════════════════════════
+
+    try:
+        capex_curr = _find_row_value(cf_rows, 'Capital Expenditure', curr_col) or _find_row_value(cf_rows, 'Cash from Investing Activity', curr_col)
+        capex_curr = abs(capex_curr)
+        capex_pct_curr = (capex_curr / revenue_curr * 100) if revenue_curr > 0 else 0
+
+        capex_prior = _find_row_value(cf_rows, 'Capital Expenditure', prior_col) or _find_row_value(cf_rows, 'Cash from Investing Activity', prior_col)
+        capex_prior = abs(capex_prior)
+        capex_pct_prior = (capex_prior / revenue_prior * 100) if revenue_prior > 0 else 0
+
+        capex_trend = "Increasing" if capex_pct_curr > capex_pct_prior else "Decreasing" if capex_pct_curr < capex_pct_prior else "Stable"
+
+        wc_pct_curr = (wc_curr / revenue_curr * 100) if revenue_curr > 0 else 0
+        wc_pct_prior = (wc_prior / revenue_prior * 100) if revenue_prior > 0 else 0
+        wc_trend = "Improving" if wc_pct_curr < wc_pct_prior else "Declining" if wc_pct_curr > wc_pct_prior else "Stable"
+
+        output.append(f"\n  Capex Intensity:")
+        output.append(f"    Current: {capex_pct_curr:.1f}% | Prior: {capex_pct_prior:.1f}% → {capex_trend}")
+
+        output.append(f"\n  Working Capital % of Revenue:")
+        output.append(f"    Current: {wc_pct_curr:.1f}% | Prior: {wc_pct_prior:.1f}% → {wc_trend}")
+
+    except Exception as e:
+        output.append(f"\n  Capex & Working Capital: Insufficient data")
+
+    output.append("  ─────────────────────────────────────────────────\n")
+
+    return "\n".join(output)
+
+
+def format_peer_comparison(ticker: str, screener_data: dict[str, Any]) -> str:
+    """
+    Format peer comparison table from screener data.
+    Returns formatted string with peer metrics and sector median P/E.
+    """
+    if not isinstance(screener_data, dict):
+        return ""
+
+    # Check for peers data
+    peers = screener_data.get('peers')
+    if not peers or not isinstance(peers, dict):
+        return ""
+
+    peers_rows = peers.get('rows', [])
+    if not peers_rows:
+        return ""
+
+    try:
+        output = []
+        output.append("\n  ── PEER COMPARISON ──────────────────────────────")
+        output.append("  Company           P/E    ROE    ROCE   Rev Gr  Pat Gr  D/E")
+
+        # Add current ticker first
+        key_ratios = screener_data.get('key_ratios', {})
+        top_ratios = {r['name']: r['value'] for r in key_ratios.get('top_ratios', []) if isinstance(r, dict)}
+
+        pe = _safe_float(top_ratios.get('Stock P/E', '0'))
+        roe = _safe_float(top_ratios.get('ROE', '0%'))
+        roce = _safe_float(top_ratios.get('ROCE', '0%'))
+
+        ticker_display = f"★ {ticker}".ljust(17)
+        output.append(f"  {ticker_display} {pe:>4.0f}x {roe:>5.1f}% {roce:>5.1f}% {'N/A':>5} {'N/A':>5} {'N/A':>3}")
+
+        # Add peers (sorted by market cap if available)
+        pe_values = []
+        for peer in peers_rows:
+            if isinstance(peer, dict):
+                company = peer.get('company', 'N/A')
+                company_display = company[:17].ljust(17)
+                pe = _safe_float(peer.get('pe', '0'))
+                roe = _safe_float(peer.get('roe', '0%'))
+                roce = _safe_float(peer.get('roce', '0%'))
+                rev_gr = peer.get('revenue_growth', 'N/A')
+                pat_gr = peer.get('profit_growth', 'N/A')
+                de = peer.get('debt_equity', 'N/A')
+
+                output.append(f"  {company_display} {pe:>4.0f}x {roe:>5.1f}% {roce:>5.1f}% {str(rev_gr):>5} {str(pat_gr):>5} {str(de):>3}")
+
+                if pe > 0:
+                    pe_values.append(pe)
+
+        # Calculate sector median P/E
+        if pe_values:
+            pe_values.sort()
+            median_pe = pe_values[len(pe_values) // 2]
+            ticker_pe = _safe_float(top_ratios.get('Stock P/E', '0'))
+            premium = ((ticker_pe - median_pe) / median_pe * 100) if median_pe > 0 else 0
+            premium_str = f"+{premium:.0f}%" if premium > 0 else f"{premium:.0f}%"
+
+            output.append("  ─────────────────────────────────────────────────")
+            output.append(f"  Sector median P/E: {median_pe:.0f}x | This stock premium/discount: {premium_str}")
+
+        output.append("  ─────────────────────────────────────────────────\n")
+
+        return "\n".join(output)
+
+    except Exception as e:
+        return ""
+
+
 def _escape_json_string_controls(text: str) -> str:
     repaired: list[str] = []
     in_string = False
@@ -2204,7 +2549,22 @@ def run_screener(ticker: str, ohlcv: dict, news: list, fundamentals: dict, *,
     template = _stage_prompt_template(category, 1) or SCREENER_PROMPT
     log.info(f"[{ticker}] Stage 1 — Quality Screener ({model}) …")
     news_text = "\n".join(f"• {n['title']}: {n['snippet']}" for n in news[:8])
-    fund_text = _compact_json(fundamentals, limit=1800) if fundamentals else "No screener data provided."
+
+    # Build fund_text with quantitative scores and peer comparison
+    fund_parts = []
+    if fundamentals:
+        # Add quantitative scores if available
+        if "quantitative_scores_formatted" in fundamentals:
+            fund_parts.append(fundamentals["quantitative_scores_formatted"])
+        # Add peer comparison if available
+        if "peer_comparison_formatted" in fundamentals:
+            fund_parts.append(fundamentals["peer_comparison_formatted"])
+        # Add the rest of the fundamentals as JSON
+        remaining_fund = {k: v for k, v in fundamentals.items() if not k.endswith("_formatted")}
+        if remaining_fund:
+            fund_parts.append(_compact_json(remaining_fund, limit=1200))
+
+    fund_text = "\n".join(fund_parts) if fund_parts else "No screener data provided."
     price_text = _compact_json({k: v for k, v in ohlcv.items() if k != "ohlcv"}, limit=1600)
     annual_report_text = load_annual_report_context(ticker, limit=1800, report_root=annual_report_path)
     budget_text = load_budget_context(years=2, limit=1200)
@@ -2299,7 +2659,22 @@ def run_thesis(ticker: str, ohlcv: dict, screener: dict,
     template = _stage_prompt_template(category, 2) or THESIS_PROMPT
     log.info(f"[{ticker}] Stage 2 — Thesis Writer ({model}) …")
     news_text = "\n".join(f"• {n['title']}: {n['snippet']}" for n in news[:6])
-    fund_text = _compact_json(fundamentals, limit=2200) if fundamentals else "None."
+
+    # Build fund_text with quantitative scores and peer comparison
+    fund_parts = []
+    if fundamentals:
+        # Add quantitative scores if available
+        if "quantitative_scores_formatted" in fundamentals:
+            fund_parts.append(fundamentals["quantitative_scores_formatted"])
+        # Add peer comparison if available
+        if "peer_comparison_formatted" in fundamentals:
+            fund_parts.append(fundamentals["peer_comparison_formatted"])
+        # Add the rest of the fundamentals as JSON
+        remaining_fund = {k: v for k, v in fundamentals.items() if not k.endswith("_formatted")}
+        if remaining_fund:
+            fund_parts.append(_compact_json(remaining_fund, limit=1600))
+
+    fund_text = "\n".join(fund_parts) if fund_parts else "None."
     annual_report_text = load_annual_report_context(ticker, limit=2200, report_root=annual_report_path)
     prior_history = prior.get("thesis_history", []) if isinstance(prior, dict) else []
     if prior_history:
@@ -2444,6 +2819,23 @@ def run_auditor(ticker: str, ohlcv: dict, sat: dict,
 
     news_text = "\n".join(f"• {n['title']}: {n['snippet']}" for n in news[:6])
 
+    # Build fundamentals text with quantitative scores and peer comparison
+    fund_parts = []
+    if "quantitative_scores_formatted" in fundamentals:
+        fund_parts.append(fundamentals["quantitative_scores_formatted"])
+    if "peer_comparison_formatted" in fundamentals:
+        fund_parts.append(fundamentals["peer_comparison_formatted"])
+    fund_parts.append(_compact_json(
+        {
+            "screener_source": screener.get("source") if isinstance(screener, dict) else None,
+            "key_ratios": key_ratio_summary,
+            "shareholding_pattern": shareholding_summary,
+            "quarterly_results": quarterly_summary,
+        },
+        limit=2200,
+    ))
+    fundamentals_text = "\n".join(fund_parts)
+
     prompt = template.format(
         ticker=ticker,
         price=price,
@@ -2456,15 +2848,7 @@ def run_auditor(ticker: str, ohlcv: dict, sat: dict,
         screener_score=screener.get("score", "N/A"),
         thesis=thesis.get("thesis", "No thesis written."),
         assumptions=json.dumps(assumptions, indent=2),
-        fundamentals=_compact_json(
-            {
-                "screener_source": screener.get("source") if isinstance(screener, dict) else None,
-                "key_ratios": key_ratio_summary,
-                "shareholding_pattern": shareholding_summary,
-                "quarterly_results": quarterly_summary,
-            },
-            limit=2200,
-        ),
+        fundamentals=fundamentals_text,
         prior_audits=prior_text,
         annual_reports=annual_report_text,
         budget_context=budget_text,
@@ -3266,6 +3650,41 @@ def _report_json(value: Any) -> str:
     return json.dumps(value, indent=2, ensure_ascii=False, default=str)
 
 
+def _conviction_changelog(satellites: dict[str, Any]) -> str:
+    """Build a Change Log section comparing current and previous week conviction scores."""
+    lines = []
+    for ticker in sorted(satellites.keys()):
+        sat = satellites[ticker]
+        if not isinstance(sat, dict) or sat.get("status") not in ("active", "exited"):
+            continue
+
+        audit_log = _ensure_dict_list(sat.get("audit_log", []))
+        if len(audit_log) < 2:
+            continue
+
+        current = _audit_conviction(audit_log[-1]) if audit_log else None
+        previous = _audit_conviction(audit_log[-2]) if len(audit_log) >= 2 else None
+
+        if current is None and previous is None:
+            continue
+
+        current_str = f"{current:.1f}" if current else "—"
+        previous_str = f"{previous:.1f}" if previous else "—"
+
+        delta = ""
+        if current is not None and previous is not None:
+            change = current - previous
+            arrow = "↑" if change > 0 else "↓" if change < 0 else "→"
+            delta = f" {arrow} {change:+.1f}"
+
+        lines.append(f"- **{ticker}:** {previous_str} → {current_str}{delta}")
+
+    if not lines:
+        return ""
+
+    return "## Change Log\n\nConviction Score tracking (previous week → this week):\n\n" + "\n".join(lines)
+
+
 def build_detailed_report(results: list[dict], satellites: dict, allocations: dict) -> str:
     portfolio = allocations.get("_portfolio", {}) if isinstance(allocations, dict) else {}
     lines = [
@@ -3281,6 +3700,10 @@ def build_detailed_report(results: list[dict], satellites: dict, allocations: di
         f"**Output file:** {DETAILED_OUTPUT_MD}",
         "",
     ]
+
+    changelog = _conviction_changelog(satellites)
+    if changelog:
+        lines.extend([changelog, ""])
 
     ordered_results = sorted(results, key=lambda item: (not item.get("is_held", False), item["ticker"]))
     for result in ordered_results:
@@ -3980,6 +4403,13 @@ async def run_pipeline(watchlist: list[str], searxng_url: str, *, show_live: boo
                     text = str(warning).strip()
                     if text:
                         data_warnings.append(text)
+                # Compute quantitative scores and peer comparison
+                quant_scores = compute_quantitative_scores(ticker, fundamentals)
+                if quant_scores.strip():
+                    fundamentals["quantitative_scores_formatted"] = quant_scores
+                peer_comparison = format_peer_comparison(ticker, fundamentals)
+                if peer_comparison.strip():
+                    fundamentals["peer_comparison_formatted"] = peer_comparison
             prior_sat = satellites.get(ticker, {})
             _ar_str = prior_sat.get("annual_report_path", "") if isinstance(prior_sat, dict) else ""
             ar_path: Path | None = Path(_ar_str) if _ar_str and Path(_ar_str).exists() else None
