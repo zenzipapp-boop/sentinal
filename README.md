@@ -1,158 +1,98 @@
-# Weekly Satellite Portfolio Auditor
+# Sentinal
 
-A headless Python 3.11+ script that orchestrates **one browser-use MCP
-extraction stage** plus **three local Ollama models** sequentially to produce a
-Markdown audit for Claude Sonnet synthesis.
+A local Indian equity research pipeline for weekly satellite portfolio review.
 
-```
-watchlist.json / satellites.json
-  │
-  ├─ yfinance ──────────── OHLCV + volume history
-  ├─ Browser Use MCP ────── Authenticated Screener.in extraction
-  ├─ SearXNG ────────────── Optional news context
-  │
-  ▼
-┌──────────────────────────────────────────────────────┐
-│ Step 1: Qwen 3.6 35B   — Quality screen             │
-│ Step 2: GPT-OSS 20B     — 3-paragraph thesis        │   (strictly sequential)
-│ Step 3: Gemma 4 26B     — Thesis audit / red flags   │
-└──────────────────────────────────────────────────────┘
-  │
-  ├─ satellites.json              (atomic weekly state)
-  └─ SATELLITE_REPORT_YYYY-MM-DD.md (Claude-ready markdown)
-```
+This repository combines per-ticker portfolio state, Screener.in fundamentals, annual report context, market data, and a three-stage local LLM flow to generate human-readable markdown research reports.
 
----
+## What is in this repo
 
-## Prerequisites
+- `market_pipeline.py` — the main weekly research pipeline and portfolio manager.
+- `annual_report_processor.py` — extracts and processes annual report text and summaries.
+- `run_mcp_server.py` — starts a local Browser Use MCP server for authenticated Screener.in extraction.
+- `verify_screener.py` — validates Screener.in extraction payloads.
+- `portfolio_data/` — current/watchlist/exited per-ticker JSON state.
+- `screener_data/` — cached Screener.in JSON snapshots.
+- `annual_reports/` — raw PDFs plus processed extracted text and summaries.
+- `reports/` — generated weekly markdown outputs.
+- `requirements.txt` — Python dependency list.
 
-| Requirement | Details |
-|---|---|
-| Python | 3.11+ |
-| Ollama | Running locally at `localhost:11434` |
-| Models pulled | `qwen3.6:35b`, `gpt-oss:20b`, `gemma4:26b` |
-| Browser Use MCP | `BROWSER_USE_API_KEY` recommended for authenticated Screener.in extraction |
-| SearXNG | Optional — running at `localhost:8080` |
-| GPU | RTX 5070 Ti (or any 16 GB+ VRAM card) |
+## Current workflow
 
----
+1. `market_pipeline.py` loads portfolio state from `portfolio_data/`.
+2. It fetches or reads cached Screener.in fundamentals from `screener_data/`.
+3. It loads annual-report context from `annual_reports/processed/`.
+4. It downloads market data for tickers.
+5. It runs a three-stage Ollama model sequence (quality screen, thesis writer, auditor).
+6. It writes report artifacts into `reports/`.
+
+## Data layout
+
+- `portfolio_data/current/cores/` — active core holdings.
+- `portfolio_data/current/satellites/` — active satellite holdings.
+- `portfolio_data/watchlist/cores/` — watchlist core candidates.
+- `portfolio_data/watchlist/satellites/` — watchlist satellite candidates.
+- `portfolio_data/exited/` — exited positions.
+- `screener_data/` — Screener.in extraction JSON files per ticker.
+- `annual_reports/processed/` — extracted text, summaries, and per-ticker indices.
 
 ## Installation
 
 ```bash
-# 1. Clone / copy files into a directory
-cd ~/market_pipeline
-
-# 2. Create a virtual environment
-python3 -m venv .venv && source .venv/bin/activate
-
-# 3. Install dependencies
+cd /home/yeet/sentinal
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-
-# 4. Pull Ollama models (do this once)
-ollama pull qwen3.6:35b
-ollama pull gpt-oss:20b
-ollama pull gemma4:26b
 ```
-
----
-
-## Configuration
-
-### watchlist.json
-Edit `watchlist.json` to add/remove NSE tickers (use `.NS` suffix for Yahoo Finance):
-
-```json
-["HDFCBANK.NS", "ITC.NS", "RELIANCE.NS", "TCS.NS", "INFY.NS"]
-```
-
-### Model names
-If you have different Ollama model tags installed, edit the constants at the top
-of `market_pipeline.py`:
-
-```python
-MODEL_SCREENER = "qwen3.6:35b"   # Step 1
-MODEL_THESIS   = "gpt-oss:20b"   # Step 2
-MODEL_AUDITOR  = "gemma4:26b"    # Step 3
-```
-
-### Browser Use MCP
-Set `BROWSER_USE_API_KEY` for authenticated Screener.in extraction. If you also
-have a saved Browser Use profile, set `BROWSER_USE_PROFILE_ID` or place the ID
-in `~/.chrome-browser-use/profile_id.txt`.
-
----
 
 ## Usage
 
+Run the main weekly pipeline:
+
 ```bash
-# Default (watchlist.json + SearXNG at localhost:8080)
 python market_pipeline.py
-
-# Custom paths
-python market_pipeline.py --watchlist my_stocks.json --searxng http://192.168.1.10:8080
 ```
 
-### What happens
-1. **Browser Use MCP** extracts Screener.in's Key Ratios, Shareholding Pattern,
-  and Quarterly Results into `screener_data/TICKER.json`.
-2. **yfinance** downloads 1 year of OHLCV and trend context.
-3. The three Ollama models run **strictly one at a time** to respect 16 GB VRAM:
-  - **Qwen 3.6 35B** → quality screen
-  - **GPT-OSS 20B** → 3-paragraph thesis
-  - **Gemma 4 26B** → skeptical audit and invalidation triggers
-4. `satellites.json` is updated atomically with `thesis_history` and `audit_log`.
-5. `SATELLITE_REPORT_YYYY-MM-DD.md` is written for downstream Claude synthesis.
-
----
-
-## Output Files
-
-### `SATELLITE_REPORT_YYYY-MM-DD.md`
-Paste or upload to **Claude Sonnet**. The report contains:
-- Screening summary
-- Extracted fundamentals
-- Stage 1 score
-- Stage 2 thesis
-- Stage 3 audit
-- SIP recommendation
-- Changes since last audit
-- Key red flags and thesis invalidation triggers
-
-### `satellites.json`
-Atomic weekly portfolio state, including `thesis_history` and `audit_log` for each active satellite.
-
----
-
-## SearXNG Setup (optional but recommended)
+Optional flags:
 
 ```bash
-# Docker one-liner
-docker run -d -p 8080:8080 \
-  -e SEARXNG_SETTINGS_URL=http://localhost:8080 \
-  --name searxng searxng/searxng
+python market_pipeline.py --watchlist my_stocks.json
+python market_pipeline.py --screener DIXON.NS
+python market_pipeline.py --browser-live
+python market_pipeline.py --add "DIXON.NS:840:30"
+python market_pipeline.py --exit DIXON.NS
 ```
 
-Without SearXNG, the pipeline runs in **offline mode** — sentiment analysis
-falls back to the model's priors (still useful, just less current).
+## Annual report processing
 
----
+Process or reprocess annual reports with:
 
-## Troubleshooting
+```bash
+python annual_report_processor.py --input-dir annual_reports --output-dir annual_reports/processed
+```
 
-| Problem | Fix |
-|---|---|
-| `ollama: command not found` | Install from https://ollama.com |
-| Model not found error | Run `ollama pull <model_name>` |
-| OOM / CUDA out of memory | Keep the three model stages sequential; reduce `num_ctx` if needed |
-| yfinance returns empty | Check ticker spelling (`.NS` for NSE, `.BO` for BSE) |
-| SearXNG timeout | Pass `--searxng http://your-ip:8080` or leave offline |
-| Screener extraction fails | Set `BROWSER_USE_API_KEY` and optionally `BROWSER_USE_PROFILE_ID`; fallback HTTP extraction is best-effort only |
+This writes extracted text and JSON summaries for each ticker under `annual_reports/processed/`.
 
----
+## Browser Use MCP
 
-## Architecture Notes
+`run_mcp_server.py` starts a local MCP service that the pipeline can use to fetch authenticated Screener.in data when direct API extraction is unavailable.
 
-- **No parallelism** — models run one at a time to respect RTX 5070 Ti VRAM limits.
-- **Explicit unload** — each Ollama stage uses `keep_alive=0s` plus `ollama stop` best effort.
-- Browser Use MCP is the primary authenticated Screener.in path; direct HTTP parsing is only a fallback.
+## Screener verification
+
+`verify_screener.py` checks that Screener payloads contain the expected sections and table structure.
+
+## Notes
+
+- The pipeline now uses `portfolio_data/` as the primary persistent state store.
+- Legacy `watchlist.json` and `satellites.json` support is still available, but the active project layout is per-ticker JSON files under `portfolio_data/`.
+- Generated reports are written to `reports/`, not the repository root.
+- `screener_data/` contains the cached fundamentals the pipeline prefers.
+
+## Recommended setup
+
+- Python 3.11+
+- Local Ollama or compatible LLM environment for the three-stage model flow.
+- Browser Use credentials or profile for reliable Screener.in extraction.
+
+## Existing outputs
+
+The current workspace includes generated reports in `reports/` and processed annual-report artifacts in `annual_reports/processed/`.

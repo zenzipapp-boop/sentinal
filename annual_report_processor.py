@@ -16,6 +16,8 @@ from pypdf import PdfReader
 
 from market_pipeline import extract_json, ollama_generate, screener_company_slug
 
+BASE_DIR = Path(__file__).parent.resolve()
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s │ %(levelname)-8s │ %(message)s",
@@ -24,15 +26,33 @@ logging.basicConfig(
 log = logging.getLogger("annual-report")
 SKIP_LLM_PLACEHOLDER = "raw text extracted"
 
+# Bouncer: Skip pages that are noise (legal forms, proxy statements, etc.)
+BLACKLISTED_PAGES = [
+    "proxy form",
+    "proxy statement",
+    "attendance slip",
+    "e-voting instructions",
+    "ballot paper",
+    "voting instruction form",
+    "notice of annual general meeting",
+    "agm notice",
+    "shareholder notice",
+    "consent form",
+    "power of attorney",
+    "resolution",
+    "director certification",
+]
+
 
 @dataclass
 class ReportArtifact:
-    pdf_path: Path
+    pdf_paths: list[Path]
     text_path: Path
     summary_path: Path
     page_count: int
     extracted_chars: int
     model_used: str
+    year: str
 
 
 CHUNK_SUMMARY_SCHEMA: dict[str, Any] = {
@@ -166,11 +186,17 @@ def read_pdf_pages(pdf_path: Path) -> list[dict[str, Any]]:
             except Exception:
                 text = ""
         text = re.sub(r"\s+", " ", text.replace("\x00", " ")).strip()
+
+        # Bouncer: Skip pages that match blacklisted keywords
+        if any(keyword in text.lower() for keyword in BLACKLISTED_PAGES):
+            log.info(f"Skipping Page {page_number} (Detected as Noise: {[k for k in BLACKLISTED_PAGES if k in text.lower()][0]})")
+            continue
+
         pages.append({"page": page_number, "text": text})
     return pages
 
 
-def chunk_pages(pages: list[dict[str, Any]], max_chars: int = 12000) -> list[dict[str, Any]]:
+def chunk_pages(pages: list[dict[str, Any]], max_chars: int = 32000) -> list[dict[str, Any]]:
     chunks: list[dict[str, Any]] = []
     current_pages: list[dict[str, Any]] = []
     current_chars = 0
@@ -218,11 +244,26 @@ def safe_json_load(text: str) -> dict[str, Any]:
         return extract_json(text)
 
 
-def generate_with_fallback(prompt: str, models: list[str], schema: dict[str, Any], num_predict: int) -> tuple[dict[str, Any], str, str]:
+def generate_with_fallback(
+    prompt: str,
+    models: list[str],
+    schema: dict[str, Any],
+    num_predict: int,
+    num_ctx: int = 32768,
+    temperature: float = 0.1,
+) -> tuple[dict[str, Any], str, str]:
     last_error = ""
     for model in models:
         try:
-            raw = ollama_generate(model, prompt, num_predict=num_predict, format_schema=schema)
+            effective_ctx = 96000 if model == "gemma4:latest" else num_ctx
+            raw = ollama_generate(
+                model,
+                prompt,
+                num_predict=num_predict,
+                format_schema=schema,
+                num_ctx=effective_ctx,
+                temperature=temperature,
+            )
             parsed = safe_json_load(raw)
             if not parsed:
                 parsed = {"summary_text": raw.strip()}
@@ -234,11 +275,13 @@ def generate_with_fallback(prompt: str, models: list[str], schema: dict[str, Any
 
 
 def summarize_chunk(ticker: str, report_name: str, chunk: dict[str, Any], models: list[str]) -> dict[str, Any]:
-    prompt = f"""You are extracting structured notes from an annual report for a long-term equity analyst.
+    prompt = f"""You are a Forensic Equity Auditor extracting structured notes from an annual report.
 
 Company: {ticker}
 Report: {report_name}
 Pages: {chunk['page_start']} to {chunk['page_end']}
+
+Do not just summarize; investigate. Look for gaps between management's promises and the Notes to Accounts. If a number looks unusual compared to prior context, flag it as a Discrepancy.
 
 Focus on business changes, revenue growth, margins, capex, capacity, working capital, debt, guidance, governance, litigation, and any risks or surprises. Ignore boilerplate and repeated legal text.
 
@@ -266,10 +309,12 @@ Return valid JSON only:
 
 
 def summarize_report(ticker: str, report_name: str, chunk_summaries: list[dict[str, Any]], models: list[str]) -> dict[str, Any]:
-    prompt = f"""You are synthesizing the annual-report chunks of a single company into a compact investor note.
+    prompt = f"""You are a Forensic Equity Auditor synthesizing annual-report chunks into a comprehensive investor thesis.
 
 Company: {ticker}
 Report: {report_name}
+
+Investigate discrepancies between management claims and actual results. Cross-reference numbers across sections. Flag inconsistencies.
 
 Chunk summaries:
 {json.dumps(chunk_summaries, indent=2, ensure_ascii=False)}
@@ -277,17 +322,17 @@ Chunk summaries:
 Return valid JSON only:
 {{
   "report_title": "short report title",
-  "one_line_summary": "one sentence",
+  "one_line_summary": "one sentence thesis or key finding",
   "main_points": ["point 1", "point 2"],
-  "financial_trend": "short description of revenue/margin/cash flow direction",
-  "capex_and_growth": ["capex or growth note"],
-  "risks": ["risk 1", "risk 2"],
-  "thesis_implications": ["implication 1", "implication 2"],
-  "management_tone": "bullish/cautious/mixed and why",
+  "financial_trend": "detailed description of revenue/margin/cash flow direction and quality of earnings",
+  "capex_and_growth": ["capex or growth note with forensic implications"],
+  "risks": ["material risk 1", "material risk 2"],
+  "thesis_implications": ["implication 1", "implication 2", "implication 3"],
+  "management_tone": "bullish/cautious/mixed and credibility assessment",
   "confidence_score": 1-10
 }}"""
 
-    parsed, raw, model_used = generate_with_fallback(prompt, models, REPORT_SUMMARY_SCHEMA, num_predict=900)
+    parsed, raw, model_used = generate_with_fallback(prompt, models, REPORT_SUMMARY_SCHEMA, num_predict=2048)
     parsed["raw"] = raw
     parsed["model"] = model_used
     parsed["report_name"] = report_name
@@ -295,9 +340,11 @@ Return valid JSON only:
 
 
 def summarize_index(ticker: str, report_summaries: list[dict[str, Any]], models: list[str]) -> dict[str, Any]:
-    prompt = f"""You are combining multiple annual-report summaries into a compact context block for a stock analyst.
+    prompt = f"""You are a Forensic Equity Auditor combining multiple annual-report summaries into a comprehensive investment thesis.
 
 Ticker: {ticker}
+
+Identify patterns, divergences, and red flags across reports. Flag if management tone is inconsistent or if risks are escalating.
 
 Report summaries:
 {json.dumps(report_summaries, indent=2, ensure_ascii=False)}
@@ -305,16 +352,16 @@ Report summaries:
 Return valid JSON only:
 {{
   "ticker": "{ticker}",
-  "portfolio_summary": "2-4 sentence synthesis of the latest annual-report story",
+  "portfolio_summary": "2-4 sentence synthesis of the latest annual-report story with thesis implications",
   "main_trends": ["trend 1", "trend 2"],
   "repeated_themes": ["theme 1", "theme 2"],
-  "key_risks": ["risk 1", "risk 2"],
+  "key_risks": ["material risk 1", "material risk 2"],
   "thesis_implications": ["implication 1", "implication 2"],
-  "management_tone": "bullish/cautious/mixed and why",
+  "management_tone": "bullish/cautious/mixed and credibility trend",
   "confidence_score": 1-10
 }}"""
 
-    parsed, raw, model_used = generate_with_fallback(prompt, models, INDEX_SUMMARY_SCHEMA, num_predict=900)
+    parsed, raw, model_used = generate_with_fallback(prompt, models, INDEX_SUMMARY_SCHEMA, num_predict=2048)
     parsed["raw"] = raw
     parsed["model"] = model_used
     return parsed
@@ -325,28 +372,36 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def process_report(pdf_path: Path, ticker: str, raw_root: Path, output_root: Path, models: list[str], skip_llm: bool) -> ReportArtifact:
-    pages = read_pdf_pages(pdf_path)
-    extracted_text = "\n\n".join(
-        f"[Page {page['page']}] {page['text']}" for page in pages if str(page.get("text", "")).strip()
-    )
-    report_stem = pdf_path.stem
+def process_report(pdf_paths: list[Path], ticker: str, year: str, raw_root: Path, output_root: Path, models: list[str], skip_llm: bool) -> ReportArtifact:
+    """Process one or more PDFs for a given year, concatenating with source labels."""
+    extracted_text_parts: list[str] = []
+
+    for pdf_path in sorted(pdf_paths):
+        pages = read_pdf_pages(pdf_path)
+        pdf_text = "\n\n".join(
+            f"[Page {page['page']}] {page['text']}" for page in pages if str(page.get("text", "")).strip()
+        )
+        extracted_text_parts.append(f"=== SOURCE: {pdf_path.name} ===\n{pdf_text}")
+
+    extracted_text = "\n\n".join(extracted_text_parts)
+
     ticker_dir = output_root / ticker.upper()
     raw_dir = ticker_dir / "raw"
     summary_dir = ticker_dir / "summaries"
     ensure_dir(raw_dir)
     ensure_dir(summary_dir)
 
-    text_path = raw_dir / f"{report_stem}.txt"
+    text_path = raw_dir / f"{year}.txt"
     text_path.write_text(extracted_text, encoding="utf-8")
 
+    pages = read_pdf_pages(pdf_paths[0]) if pdf_paths else []
     chunks = chunk_pages(pages)
     summary_payload: dict[str, Any]
     model_used = "none"
 
     if skip_llm:
         summary_payload = {
-            "report_title": report_stem,
+            "report_title": year,
             "one_line_summary": f"LLM summarization skipped; {SKIP_LLM_PLACEHOLDER} only.",
             "main_points": [],
             "financial_trend": "Unavailable",
@@ -355,18 +410,18 @@ def process_report(pdf_path: Path, ticker: str, raw_root: Path, output_root: Pat
             "thesis_implications": [],
             "management_tone": "Unavailable",
             "confidence_score": 0,
-            "source": pdf_path.name,
+            "source_files": [p.name for p in pdf_paths],
         }
     else:
-        chunk_summaries = [summarize_chunk(ticker, pdf_path.name, chunk, models) for chunk in chunks or [{"page_start": 1, "page_end": 1, "text": extracted_text[:20000]}]]
-        summary_payload = summarize_report(ticker, pdf_path.name, chunk_summaries, models)
+        chunk_summaries = [summarize_chunk(ticker, year, chunk, models) for chunk in chunks or [{"page_start": 1, "page_end": 1, "text": extracted_text[:20000]}]]
+        summary_payload = summarize_report(ticker, year, chunk_summaries, models)
         summary_payload["chunk_summaries"] = chunk_summaries
         model_used = str(summary_payload.get("model", models[0] if models else "unknown"))
 
     summary_payload.update(
         {
-            "source": pdf_path.name,
-            "pdf_path": str(pdf_path),
+            "source_files": [p.name for p in pdf_paths],
+            "pdf_paths": [str(p) for p in pdf_paths],
             "page_count": len(pages),
             "extracted_chars": len(extracted_text),
             "extraction_quality": "good" if len(extracted_text) > 2000 else "limited",
@@ -375,16 +430,17 @@ def process_report(pdf_path: Path, ticker: str, raw_root: Path, output_root: Pat
         }
     )
 
-    summary_path = summary_dir / f"{report_stem}.json"
+    summary_path = summary_dir / f"{year}.json"
     write_json(summary_path, summary_payload)
 
     return ReportArtifact(
-        pdf_path=pdf_path,
+        pdf_paths=pdf_paths,
         text_path=text_path,
         summary_path=summary_path,
         page_count=len(pages),
         extracted_chars=len(extracted_text),
         model_used=model_used,
+        year=year,
     )
 
 
@@ -394,11 +450,12 @@ def build_index(ticker: str, artifacts: list[ReportArtifact], output_root: Path,
     index_path = ticker_dir / "index.json"
 
     report_summaries: list[dict[str, Any]] = []
-    for artifact in sorted(artifacts, key=lambda item: item.pdf_path.name):
+    for artifact in sorted(artifacts, key=lambda item: item.year):
         payload = json.loads(artifact.summary_path.read_text(encoding="utf-8"))
         report_summaries.append(
             {
-                "report_title": payload.get("report_title", artifact.pdf_path.stem),
+                "year": artifact.year,
+                "report_title": payload.get("report_title", artifact.year),
                 "one_line_summary": payload.get("one_line_summary", ""),
                 "main_points": payload.get("main_points", []),
                 "financial_trend": payload.get("financial_trend", ""),
@@ -407,13 +464,16 @@ def build_index(ticker: str, artifacts: list[ReportArtifact], output_root: Path,
                 "thesis_implications": payload.get("thesis_implications", []),
                 "management_tone": payload.get("management_tone", ""),
                 "confidence_score": payload.get("confidence_score", 0),
-                "source": artifact.pdf_path.name,
+                "source_files": payload.get("source_files", [p.name for p in artifact.pdf_paths]),
                 "summary_file": artifact.summary_path.name,
             }
         )
 
-    if not skip_llm and report_summaries:
-        combined_summary = summarize_index(ticker, report_summaries, models)
+    # Sort reports in descending order by year
+    report_summaries_sorted = sorted(report_summaries, key=lambda x: x.get("year", ""), reverse=True)
+
+    if not skip_llm and report_summaries_sorted:
+        combined_summary = summarize_index(ticker, report_summaries_sorted, models)
     else:
         combined_summary = {
             "ticker": ticker,
@@ -430,8 +490,10 @@ def build_index(ticker: str, artifacts: list[ReportArtifact], output_root: Path,
         "ticker": ticker,
         "source_dir": str(output_root),
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "report_count": len(report_summaries),
-        "reports": report_summaries,
+        "last_updated": datetime.now().isoformat(timespec="seconds"),
+        "years": [r.get("year") for r in report_summaries_sorted],
+        "report_count": len(report_summaries_sorted),
+        "reports": report_summaries_sorted,
         "combined_summary": combined_summary,
         "summary_files": [str(artifact.summary_path) for artifact in artifacts],
         "text_files": [str(artifact.text_path) for artifact in artifacts],
@@ -445,18 +507,41 @@ def build_index(ticker: str, artifacts: list[ReportArtifact], output_root: Path,
     return index_path
 
 
-def discover_reports(source_dir: Path) -> list[Path]:
+def discover_reports(source_dir: Path) -> list[tuple[str, list[Path]]]:
+    """Discover PDFs grouped by year folder (fy*) or single PDFs.
+    Returns list of (year_label, pdf_paths) tuples."""
+    reports: list[tuple[str, list[Path]]] = []
+
     if source_dir.is_file() and source_dir.suffix.lower() == ".pdf":
-        return [source_dir]
-    if source_dir.is_dir():
-        return sorted(source_dir.rglob("*.pdf"))
+        # Single PDF at root level - backward compatibility
+        return [("root", [source_dir])]
+
+    if not source_dir.is_dir():
+        return []
+
+    # Look for fy* subdirectories
+    fy_dirs = sorted([d for d in source_dir.iterdir() if d.is_dir() and d.name.startswith("fy")])
+
+    if fy_dirs:
+        # Multi-file per year structure
+        for fy_dir in fy_dirs:
+            pdfs = sorted(fy_dir.glob("*.pdf"))
+            if pdfs:
+                reports.append((fy_dir.name, pdfs))
+        return reports
+
+    # Fallback: single PDF per folder (backward compatibility)
+    pdfs = sorted(source_dir.glob("*.pdf"))
+    if pdfs:
+        return [("root", pdfs)]
+
     return []
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Extract and summarize annual reports into saved artifacts.")
-    parser.add_argument("--input-dir", default="annual_reports", help="Folder that contains annual report PDFs.")
-    parser.add_argument("--output-dir", default="annual_reports/processed", help="Folder where extracted text and summaries are saved.")
+    parser.add_argument("--input-dir", default=str(BASE_DIR / "annual_reports" / "raw"), help="Folder that contains annual report PDFs.")
+    parser.add_argument("--output-dir", default=str(BASE_DIR / "annual_reports" / "processed"), help="Folder where extracted text and summaries are saved.")
     parser.add_argument("--ticker", default="DIXON.NS", help="Ticker label used for the output folder.")
     parser.add_argument(
         "--models",
@@ -476,18 +561,19 @@ def main() -> int:
     output_root = Path(args.output_dir)
 
     source_dir = find_source_dir(input_root, args.ticker)
-    pdfs = discover_reports(source_dir)
-    if not pdfs:
+    year_groups = discover_reports(source_dir)
+    if not year_groups:
         log.error("No PDFs found under %s", source_dir)
         return 1
 
     log.info("Using source directory: %s", source_dir)
-    log.info("Found %d annual reports", len(pdfs))
+    log.info("Found %d year groups", len(year_groups))
 
     artifacts: list[ReportArtifact] = []
-    for pdf_path in pdfs:
-        log.info("Processing %s", pdf_path.name)
-        artifact = process_report(pdf_path, args.ticker, input_root, output_root, args.models, skip_llm)
+    for year, pdf_paths in year_groups:
+        pdf_names = ", ".join(p.name for p in pdf_paths)
+        log.info("Processing %s: %s", year, pdf_names)
+        artifact = process_report(pdf_paths, args.ticker, year, input_root, output_root, args.models, skip_llm)
         artifacts.append(artifact)
         log.info(
             "Saved %s (%d pages, %d chars, model=%s)",

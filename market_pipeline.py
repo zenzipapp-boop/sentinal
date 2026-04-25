@@ -37,6 +37,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -141,25 +142,36 @@ MAX_ALLOC_PCT   = 40               # no single satellite > 40% of satellite book
 OHLCV_DAYS      = 365              # 1 year for trend + valuation context
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
-SATELLITES_FILE  = Path("satellites.json")
-WATCHLIST_FILE   = Path("watchlist.json")
-PROMPTS_FILE     = Path("prompts.json")
-SCREENER_DIR     = Path("screener_data")
-ANNUAL_REPORTS_DIR = Path("annual_reports")
+BASE_DIR = Path(__file__).parent.resolve()
+
+SATELLITES_FILE  = BASE_DIR / "satellites.json"
+WATCHLIST_FILE   = BASE_DIR / "watchlist.json"
+PROMPTS_FILE     = BASE_DIR / "prompts.json"
+SCREENER_DIR     = BASE_DIR / "screener_data"
+ANNUAL_REPORTS_DIR = BASE_DIR / "annual_reports"
 ANNUAL_REPORTS_SUMMARY_DIR = ANNUAL_REPORTS_DIR / "processed"
-REPORTS_DIR      = Path("reports")
+BUDGET_DIR       = BASE_DIR / "govt_budgets"
+BUDGET_SUMMARY_DIR = BUDGET_DIR / "processed"
+REPORTS_DIR      = BASE_DIR / "reports"
 OUTPUT_MD        = REPORTS_DIR / f"SATELLITE_REPORT_{TODAY}.md"
 DETAILED_OUTPUT_MD = REPORTS_DIR / f"detailed_satellite_report_{TODAY}.md"
 SCREENER_DIR.mkdir(exist_ok=True)
 REPORTS_DIR.mkdir(exist_ok=True)
 
 # ─── Portfolio data paths ──────────────────────────────────────────────────────
-PORTFOLIO_DATA_DIR            = Path("portfolio_data")
+PORTFOLIO_DATA_DIR            = BASE_DIR / "portfolio_data"
 PORTFOLIO_CURRENT_CORES_DIR   = PORTFOLIO_DATA_DIR / "current" / "cores"
 PORTFOLIO_CURRENT_SATS_DIR    = PORTFOLIO_DATA_DIR / "current" / "satellites"
 PORTFOLIO_WATCHLIST_CORES_DIR = PORTFOLIO_DATA_DIR / "watchlist" / "cores"
 PORTFOLIO_WATCHLIST_SATS_DIR  = PORTFOLIO_DATA_DIR / "watchlist" / "satellites"
 PORTFOLIO_EXITED_DIR          = PORTFOLIO_DATA_DIR / "exited"
+
+# ─── Reports paths ────────────────────────────────────────────────────────────
+REPORTS_CURRENT_CORES_DIR     = REPORTS_DIR / "current" / "cores"
+REPORTS_CURRENT_SATS_DIR      = REPORTS_DIR / "current" / "satellites"
+REPORTS_WATCHLIST_CORES_DIR   = REPORTS_DIR / "watchlist" / "cores"
+REPORTS_WATCHLIST_SATS_DIR    = REPORTS_DIR / "watchlist" / "satellites"
+REPORTS_EXITED_DIR            = REPORTS_DIR / "exited"
 
 ANNUAL_REPORT_CONTEXT_WARNINGS: dict[str, str] = {}
 STAGE_RETRY_DELAY_SECONDS = 5
@@ -523,7 +535,7 @@ def _find_matching_subdir(root: Path, ticker: str) -> Path | None:
     return None
 
 
-def load_annual_report_context(ticker: str, limit: int = 2200, *, report_root: Path | None = None) -> str:
+def load_annual_report_context(ticker: str, limit: int = 2200, *, report_root: Path | None = None, annual_report_years: int = 3) -> str:
     if report_root is None:
         report_root = _find_matching_subdir(ANNUAL_REPORTS_SUMMARY_DIR, ticker)
     if report_root is None:
@@ -559,29 +571,34 @@ def load_annual_report_context(ticker: str, limit: int = 2200, *, report_root: P
             payload = json.loads(index_path.read_text(encoding="utf-8"))
             if isinstance(payload, dict):
                 reports = payload.get("reports")
+                years = payload.get("years", [])
+
                 if isinstance(reports, list) and reports:
                     placeholders = [_is_raw_text_placeholder(report) for report in reports]
                     if placeholders and all(placeholders):
                         _warn_placeholder_only()
                     else:
                         ANNUAL_REPORT_CONTEXT_WARNINGS.pop(ticker, None)
+
+                    recent_reports = reports[:annual_report_years] if years else reports[:annual_report_years]
                 else:
                     ANNUAL_REPORT_CONTEXT_WARNINGS.pop(ticker, None)
+                    recent_reports = []
 
                 for key in ("combined_summary", "summary", "annual_report_summary"):
                     value = payload.get(key)
                     if value and not _is_placeholder_summary(value):
                         return _compact_json(value, limit=limit) if isinstance(value, (dict, list)) else str(value)[:limit]
 
-                if isinstance(reports, list) and reports:
-                    return _compact_json({"reports": reports[:4]}, limit=limit)
+                if recent_reports:
+                    return _compact_json({"reports": recent_reports}, limit=limit)
         except Exception as exc:
             log.warning("[%s] Failed to read annual report index: %s", ticker, exc)
             ANNUAL_REPORT_CONTEXT_WARNINGS.pop(ticker, None)
 
     summary_files = sorted((report_root / "summaries").glob("*.json"))
     collected: list[dict[str, Any]] = []
-    for path in summary_files[:4]:
+    for path in summary_files[:annual_report_years]:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -603,6 +620,117 @@ def load_annual_report_context(ticker: str, limit: int = 2200, *, report_root: P
         return _compact_json({"reports": collected}, limit=limit)
     ANNUAL_REPORT_CONTEXT_WARNINGS.pop(ticker, None)
     return "No annual report summary available."
+
+
+def load_budget_context(years: int = 2, limit: int = 1500) -> str:
+    """Load and format government budget summaries for LLM prompts. Returns explicit fallback if not available."""
+    if not BUDGET_SUMMARY_DIR.exists():
+        return "No budget data available. Proceed without macro budget context."
+
+    index_path = BUDGET_SUMMARY_DIR / "index.json"
+    if not index_path.exists():
+        return "No budget data available. Proceed without macro budget context."
+
+    try:
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return "No budget data available. Proceed without macro budget context."
+
+        year_list = payload.get("years", [])
+        summaries = payload.get("summaries", {})
+
+        if not year_list or not summaries:
+            return "No budget data available. Proceed without macro budget context."
+
+        recent_years = year_list[:years]
+        formatted_parts: list[str] = []
+
+        for year in recent_years:
+            budget = summaries.get(year)
+            if not budget or not isinstance(budget, dict):
+                continue
+
+            fiscal_stance = budget.get("fiscal_stance", "unknown")
+            fiscal_deficit = budget.get("fiscal_deficit_gdp", "N/A")
+            capex = budget.get("capex_outlay", "N/A")
+
+            formatted_parts.append(f"BUDGET {year}: {fiscal_stance} | Deficit: {fiscal_deficit} | Capex: {capex}")
+
+            pli_schemes = budget.get("pli_schemes", [])
+            if pli_schemes:
+                pli_lines = []
+                for scheme in pli_schemes[:5]:
+                    if isinstance(scheme, dict):
+                        name = scheme.get("scheme_name", "Unknown")
+                        sector = scheme.get("sector", "")
+                        allocation = scheme.get("allocation", "")
+                        pli_lines.append(f"  • {name} ({sector}): {allocation}")
+                if pli_lines:
+                    formatted_parts.append("\nPLI SCHEMES:\n" + "\n".join(pli_lines))
+
+            sector_tailwinds = budget.get("sector_tailwinds", [])
+            if sector_tailwinds:
+                tw_lines = []
+                for tw in sector_tailwinds[:5]:
+                    if isinstance(tw, dict):
+                        sector = tw.get("sector", "")
+                        equity_impact = tw.get("equity_impact", "")
+                        if sector and equity_impact:
+                            tw_lines.append(f"  • {sector}: {equity_impact}")
+                if tw_lines:
+                    formatted_parts.append("\nSECTOR TAILWINDS:\n" + "\n".join(tw_lines))
+
+            sector_headwinds = budget.get("sector_headwinds", [])
+            if sector_headwinds:
+                hw_lines = []
+                for hw in sector_headwinds[:5]:
+                    if isinstance(hw, dict):
+                        sector = hw.get("sector", "")
+                        equity_impact = hw.get("equity_impact", "")
+                        if sector and equity_impact:
+                            hw_lines.append(f"  • {sector}: {equity_impact}")
+                if hw_lines:
+                    formatted_parts.append("\nSECTOR HEADWINDS:\n" + "\n".join(hw_lines))
+
+            import_duties = budget.get("import_duty_changes", [])
+            if import_duties:
+                duty_lines = []
+                for duty in import_duties[:5]:
+                    if isinstance(duty, dict):
+                        item = duty.get("item", "")
+                        change = duty.get("change", "")
+                        new_rate = duty.get("new_rate", "")
+                        equity_impact = duty.get("equity_impact", "")
+                        if item and equity_impact:
+                            duty_lines.append(f"  • {item} ({change} to {new_rate}): {equity_impact}")
+                if duty_lines:
+                    formatted_parts.append("\nIMPORT DUTY CHANGES:\n" + "\n".join(duty_lines))
+
+            tax_changes = budget.get("tax_changes", [])
+            if tax_changes:
+                tax_lines = []
+                for tax in tax_changes[:5]:
+                    if isinstance(tax, dict):
+                        tax_type = tax.get("type", "")
+                        description = tax.get("description", "")
+                        equity_impact = tax.get("equity_impact", "")
+                        if tax_type and equity_impact:
+                            tax_lines.append(f"  • {tax_type}: {equity_impact}")
+                if tax_lines:
+                    formatted_parts.append("\nTAX CHANGES:\n" + "\n".join(tax_lines))
+
+            formatted_parts.append("")
+
+        if formatted_parts:
+            formatted_text = "\n".join(formatted_parts)
+            if len(formatted_text) > limit:
+                formatted_text = formatted_text[:limit] + "..."
+            return formatted_text
+
+    except Exception as exc:
+        log.warning("Failed to load budget context: %s", exc)
+
+    return "No budget data available. Proceed without macro budget context."
 
 
 def _escape_json_string_controls(text: str) -> str:
@@ -1353,6 +1481,27 @@ def _ticker_folder(status: str, category: str) -> Path:
     return PORTFOLIO_WATCHLIST_CORES_DIR if c == "core" else PORTFOLIO_WATCHLIST_SATS_DIR
 
 
+def _ticker_report_folder(status: str, category: str) -> Path:
+    s = status.lower().strip()
+    c = category.lower().strip()
+    if s == "exited":
+        return REPORTS_EXITED_DIR
+    if s == "active":
+        return REPORTS_CURRENT_CORES_DIR if c == "core" else REPORTS_CURRENT_SATS_DIR
+    return REPORTS_WATCHLIST_CORES_DIR if c == "core" else REPORTS_WATCHLIST_SATS_DIR
+
+
+def move_ticker_reports(ticker: str, from_status: str, to_status: str, category: str) -> None:
+    """Move all per-ticker report files from source folder to destination folder."""
+    src = _ticker_report_folder(from_status, category)
+    dst = _ticker_report_folder(to_status, category)
+    dst.mkdir(parents=True, exist_ok=True)
+    for f in sorted(src.glob(f"{ticker}_*.md")):
+        dst_path = dst / f.name
+        shutil.move(str(f), str(dst_path))
+        print(f"  Moved report: {f.name}  →  {dst_path}")
+
+
 def _all_portfolio_dirs() -> list[Path]:
     return [
         PORTFOLIO_CURRENT_CORES_DIR,
@@ -1564,10 +1713,12 @@ def cmd_exit(ticker: str) -> None:
         exit_reason = input("  Exit reason: ").strip()
     except EOFError:
         exit_reason = ""
+    _old_category = rec.get("category", "satellite")
     rec["status"] = "exited"
     rec["exit_date"] = TODAY
     rec["exit_reason"] = exit_reason
     save_single_ticker(rec)
+    move_ticker_reports(ticker, "active", "exited", _old_category)
     log.info(f"[SATELLITE] {ticker} marked exited → portfolio_data/exited/")
 
 
@@ -1820,10 +1971,12 @@ def ollama_generate(
     prompt: str,
     num_predict: int = 1200,
     format_schema: dict[str, Any] | str | None = None,
+    num_ctx: int = 8192,
+    temperature: float = 0.0,
 ) -> str:
     options = {
-        "temperature": 0.0,
-        "num_ctx": 8192,
+        "temperature": temperature,
+        "num_ctx": num_ctx,
         "num_predict": num_predict,
         "keep_alive": OLLAMA_KEEP_ALIVE,
     }
@@ -1931,6 +2084,9 @@ FUNDAMENTALS (from Screener.in — may be empty if not provided):
 ANNUAL REPORT CONTEXT:
 {annual_reports}
 
+GOVERNMENT BUDGET CONTEXT:
+{budget_context}
+
 RECENT NEWS:
 {news}
 
@@ -1967,12 +2123,14 @@ def run_screener(ticker: str, ohlcv: dict, news: list, fundamentals: dict, *,
     fund_text = _compact_json(fundamentals, limit=1800) if fundamentals else "No screener data provided."
     price_text = _compact_json({k: v for k, v in ohlcv.items() if k != "ohlcv"}, limit=1600)
     annual_report_text = load_annual_report_context(ticker, limit=1800, report_root=annual_report_path)
+    budget_text = load_budget_context(years=2, limit=1200)
 
     prompt = template.format(
         ticker=ticker,
         price_data=price_text,
         fundamentals=fund_text,
         annual_reports=annual_report_text,
+        budget_context=budget_text,
         news=news_text,
     )
     log_prompt_context_length(ticker, 1, prompt)
@@ -2017,6 +2175,9 @@ PREVIOUS AUDIT (empty if new position):
 
 ANNUAL REPORT CONTEXT:
 {annual_reports}
+
+GOVERNMENT BUDGET CONTEXT:
+{budget_context}
 
 RECENT NEWS:
 {news}
@@ -2133,6 +2294,9 @@ PRIOR AUDIT DECISIONS:
 ANNUAL REPORT CONTEXT:
 {annual_reports}
 
+GOVERNMENT BUDGET CONTEXT:
+{budget_context}
+
 RECENT NEWS:
 {news}
 
@@ -2183,6 +2347,7 @@ def run_auditor(ticker: str, ohlcv: dict, sat: dict,
         fundamentals.get("key_ratios") if isinstance(fundamentals, dict) else None
     )
     annual_report_text = load_annual_report_context(ticker, limit=1800, report_root=annual_report_path)
+    budget_text = load_budget_context(years=2, limit=1200)
 
     prior_audits = sat.get("audit_log", [])[-3:]
     prior_text = json.dumps(
@@ -2218,6 +2383,7 @@ def run_auditor(ticker: str, ohlcv: dict, sat: dict,
         ),
         prior_audits=prior_text,
         annual_reports=annual_report_text,
+        budget_context=budget_text,
         news=news_text,
         week=f"{TODAY} (Week {WEEK_NO})",
     )
@@ -2700,6 +2866,117 @@ def _ticker_data_completeness(ticker: str, sat: dict[str, Any]) -> str:
     return "Complete" if not missing else "Missing: " + ", ".join(missing)
 
 
+def build_ticker_report(
+    ticker: str,
+    rec: dict[str, Any],
+    screener: dict[str, Any],
+    thesis: dict[str, Any],
+    auditor: dict[str, Any],
+    ohlcv: dict[str, Any],
+) -> str:
+    """Build a standalone per-ticker markdown report with stage 1/2/3 sections."""
+    lines = [
+        f"# {ticker}",
+        f"**{TODAY}** | Status: {rec.get('status', 'watchlist')} | Category: {rec.get('category', 'satellite')}",
+        "",
+    ]
+
+    source_label = _ticker_source_label(rec)
+    completeness = _ticker_data_completeness(ticker, rec)
+    lines += [
+        f"**Source:** `{source_label}` | **Data:** {completeness}",
+        "",
+    ]
+
+    fundamentals = rec.get("fundamentals") or screener.get("fundamentals_snapshot") or thesis.get("fundamentals_snapshot") or auditor.get("fundamentals_snapshot") or {}
+    key_ratios = summarize_table(fundamentals.get("key_ratios") if isinstance(fundamentals, dict) else None)
+    shareholding = summarize_table(fundamentals.get("shareholding_pattern") if isinstance(fundamentals, dict) else None)
+    quarterly = summarize_table(fundamentals.get("quarterly_results") if isinstance(fundamentals, dict) else None)
+
+    lines += [
+        "**Extracted fundamentals:**",
+        f"- Key ratios: {key_ratios}",
+        f"- Shareholding pattern: {shareholding}",
+        f"- Quarterly results: {quarterly}",
+        "",
+    ]
+
+    stage1_failed = bool(screener.get("stage_failed")) if isinstance(screener, dict) else False
+    stage2_failed = bool(thesis.get("stage_failed")) if isinstance(thesis, dict) else False
+    stage3_failed = bool(auditor.get("stage_failed")) if isinstance(auditor, dict) else False
+
+    lines += [
+        f"**Stage 1 (Screening):**",
+        f"- Score: {screener.get('score', '?')}/10" if not stage1_failed else "- Stage 1 failed - model did not respond",
+        f"- Quality verdict: {screener.get('quality_verdict', 'N/A')}",
+        f"- Trend: {screener.get('trend_read', 'n/a')}",
+        "",
+    ]
+
+    lines += [
+        f"**Stage 2 (Thesis):**",
+        f"{thesis.get('thesis', 'No thesis written.').strip()}" if not stage2_failed else "Stage 2 failed - model did not respond",
+        "",
+    ]
+
+    if thesis.get('narrative_change') or thesis.get('changed_from_prior'):
+        lines += [
+            f"**Changes since last audit:** {thesis.get('narrative_change') or thesis.get('changed_from_prior')}",
+            "",
+        ]
+
+    lines += [
+        f"**Stage 3 (Audit):**",
+        f"- Conviction: {auditor.get('score', '?')}/10" if not stage3_failed else "- Stage 3 failed - model did not respond",
+        f"- Decision: {auditor.get('decision', 'HOLD')}",
+        f"- Thesis intact: {'Yes' if auditor.get('thesis_intact', True) else 'No'}",
+        f"- Decision rationale: {auditor.get('decision_rationale', '')}",
+        f"- Devil's advocate: {auditor.get('devils_advocate', '')}",
+        "",
+    ]
+
+    red_flags = []
+    for key in ("broken_assumptions", "new_risks", "red_flags", "invalidation_triggers"):
+        value = auditor.get(key, [])
+        if isinstance(value, list):
+            red_flags.extend(str(item) for item in value if str(item).strip())
+    if red_flags:
+        lines.append("**Key red flags and thesis invalidation triggers:**")
+        for flag in dict.fromkeys(red_flags):
+            lines.append(f"- {flag}")
+    else:
+        lines.append("**Key red flags and thesis invalidation triggers:** None surfaced.")
+
+    recent_tx_lines: list[str] = []
+    if rec.get("status") == "active":
+        txns = _ensure_dict_list(rec.get("transactions", []))
+        for tx in txns[-3:]:
+            tx_date = tx.get("date", "?")
+            tx_type = str(tx.get("type", "?")).upper()
+            tx_qty = tx.get("qty", "?")
+            tx_price = tx.get("price", "?")
+            tx_notes = tx.get("notes", "")
+            tx_str = f"- {tx_date} {tx_type} {tx_qty} × ₹{tx_price}"
+            if tx_notes:
+                tx_str += f" — {tx_notes}"
+            recent_tx_lines.append(tx_str)
+
+    if recent_tx_lines:
+        lines += ["", "**Recent transactions (last 3):**"]
+        lines.extend(recent_tx_lines)
+
+    return "\n".join(lines)
+
+
+def write_ticker_report(ticker: str, status: str, category: str, content: str) -> Path:
+    """Write per-ticker report to the correct reports/ subfolder."""
+    folder = _ticker_report_folder(status, category)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{ticker}_{TODAY}.md"
+    atomic_write_text(path, content)
+    return path
+
+
 def build_report(
     results: list[dict],
     satellites: dict,
@@ -3095,6 +3372,8 @@ def _do_promote_from_watchlist(ticker: str, rec: dict[str, Any], category: str) 
         "notes": "Promoted from watchlist"
     })
     print(f"  ✓ Promoted {ticker_upper} → current/{category}s @ ₹{avg_price} | qty {qty}")
+    save_single_ticker(rec)
+    move_ticker_reports(ticker_upper, "watchlist", "active", category)
     return rec
 
 
@@ -3304,6 +3583,7 @@ def _do_exit(rec: dict[str, Any], ticker: str, exit_price: float | None = None) 
         except (ValueError, EOFError):
             exit_price = None
 
+    _old_category = rec.get("category", "satellite")
     rec["status"]    = "exited"
     rec["exit_date"] = TODAY
     rec["exit_reason"] = reason
@@ -3315,6 +3595,7 @@ def _do_exit(rec: dict[str, Any], ticker: str, exit_price: float | None = None) 
     else:
         save_single_ticker(rec)
     print(f"  \u2713 {ticker} marked as exited on {TODAY}.")
+    move_ticker_reports(ticker, "active", "exited", _old_category)
 
 
 def _tx_exit(active: dict[str, Any]) -> None:
@@ -3424,8 +3705,27 @@ async def data_verification_gate(
       a) skip ticker   b) run anyway   c) refresh screener (when applicable)   d) abort pipeline
     Returns the subset of tickers cleared to run.
     """
-    print("\n  \u2500\u2500 DATA VERIFICATION GATE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
+    print("\n  \u2500\u2500\u2500\u2500 DATA VERIFICATION GATE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
     now = datetime.now()
+
+    budget_index = BUDGET_SUMMARY_DIR / "index.json"
+    if budget_index.exists():
+        try:
+            age_days = (now - datetime.fromtimestamp(budget_index.stat().st_mtime)).days
+            if age_days > 90:
+                last_updated = datetime.fromtimestamp(budget_index.stat().st_mtime).strftime("%Y-%m-%d")
+                print(f"\n  \u26a0 Budget data is stale (last updated {last_updated}). Consider re-running budget_processor.py.")
+                print("    Options: a) Continue anyway  b) Abort")
+                try:
+                    ans = input("  Choice [a/b]: ").strip().lower()
+                except EOFError:
+                    ans = "a"
+                if ans == "b":
+                    print("\n  Pipeline aborted.")
+                    sys.exit(0)
+        except Exception:
+            pass
+
     cleared: list[str] = []
 
     for ticker in tickers:
@@ -3738,6 +4038,12 @@ async def run_pipeline(watchlist: list[str], searxng_url: str, *, show_live: boo
             satellites[ticker] = _rec
             save_single_ticker(_rec)
             log.info("[%s] Audit entry saved to per-ticker JSON.", ticker)
+
+            # Write per-ticker report immediately after Stage 3
+            _final_status = str(_rec.get("status", "watchlist"))
+            _ticker_md = build_ticker_report(ticker, _rec, screener, thesis, auditor, ohlcv)
+            _report_path = write_ticker_report(ticker, _final_status, category, _ticker_md)
+            log.info("[%s] Per-ticker report written → %s", ticker, _report_path)
 
             annual_warning = ANNUAL_REPORT_CONTEXT_WARNINGS.get(ticker)
             if annual_warning:
