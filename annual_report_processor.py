@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import logging
 import re
@@ -14,8 +13,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import ollama
+import pytesseract
+from PIL import Image
 from pypdf import PdfReader
+
+import fitz
 
 from market_pipeline import extract_json, ollama_generate, screener_company_slug
 
@@ -29,23 +31,13 @@ logging.basicConfig(
 log = logging.getLogger("annual-report")
 SKIP_LLM_PLACEHOLDER = "raw text extracted"
 
-# Bouncer: Skip pages that are noise (legal forms, proxy statements, etc.)
-BLACKLISTED_PAGES = [
-    "proxy form",
-    "proxy statement",
-    "attendance slip",
-    "e-voting instructions",
-    "ballot paper",
-    "voting instruction form",
-    "notice of annual general meeting",
-    "agm notice",
-    "shareholder notice",
-    "consent form",
-    "power of attorney",
-    "resolution",
-    "director certification",
-]
-
+# OCR availability check
+OCR_AVAILABLE = True
+try:
+    pytesseract.get_tesseract_version()
+except Exception:
+    log.warning("Tesseract not installed. OCR fallback disabled. Install with: sudo apt install tesseract-ocr")
+    OCR_AVAILABLE = False
 
 @dataclass
 class ReportArtifact:
@@ -170,116 +162,32 @@ def normalize_label(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value).lower())
 
 
-def assess_page_quality(text: str, surrounding_context: str = "") -> tuple[str, str]:
-    """Score extraction quality and return (quality_level, reason).
 
-    quality_level: 'good' | 'low'
-    reason: short description of the quality decision
+
+
+
+def extract_page_with_ocr(pdf_path: Path, page_num: int) -> str:
+    """Extract text from PDF page using pytesseract OCR at 300 DPI.
+
+    Returns extracted text or empty string if OCR fails.
     """
-    text_clean = text.strip()
+    if not OCR_AVAILABLE:
+        return ""
 
-    # Empty page is low quality
-    if not text_clean:
-        return "low", "empty page"
-
-    # Check text length: < 100 chars suggests OCR failure or image page
-    if len(text_clean) < 100:
-        return "low", "sparse text"
-
-    # Detect visual page keywords in surrounding context
-    visual_keywords = ["chart", "figure", "graph", "diagram", "image", "plot"]
-    if surrounding_context and any(kw in surrounding_context.lower() for kw in visual_keywords):
-        return "low", "visual page detected"
-
-    # Count numeric tokens vs words
-    tokens = text_clean.split()
-    numeric_tokens = sum(1 for t in tokens if re.match(r'^[\d,.%-]+$', t))
-    word_tokens = sum(1 for t in tokens if re.match(r'^[a-zA-Z]+$', t))
-
-    if word_tokens == 0:
-        return "low", "no words detected"
-
-    numeric_ratio = numeric_tokens / len(tokens) if tokens else 0
-    if numeric_ratio > 0.30:
-        return "low", "floating numbers detected"
-
-    # Check for table patterns: ratio of numbers to words > 3:1 suggests table
-    if word_tokens > 0 and numeric_tokens / word_tokens > 3:
-        return "low", "table structure detected"
-
-    # Check for repeated whitespace patterns suggesting column misalignment
-    if re.search(r' {4,}', text_clean):
-        lines = text_clean.split('\n')
-        space_heavy_lines = sum(1 for line in lines if re.search(r' {4,}', line))
-        if space_heavy_lines / len(lines) > 0.5:
-            return "low", "column misalignment detected"
-
-    return "good", "clean text extraction"
-
-
-def render_page_to_image(pdf_path: Path, page_num: int, dpi: int = 150) -> bytes | None:
-    """Render a PDF page to PNG image bytes using pypdf or pymupdf.
-
-    Returns image bytes or None if rendering fails.
-    """
     try:
-        import fitz
         doc = fitz.open(str(pdf_path))
-        if page_num < 0 or page_num >= len(doc):
-            return None
         page = doc[page_num]
-        pix = page.get_pixmap(matrix=fitz.Matrix(dpi/72, dpi/72))
-        image_bytes = pix.tobytes()
+        # Render at 300 DPI for good OCR quality
+        mat = fitz.Matrix(300 / 72, 300 / 72)
+        pix = page.get_pixmap(matrix=mat)
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        # pytesseract with English, PSM 6 for single-column text
+        text = pytesseract.image_to_string(img, lang="eng", config="--psm 6")
         doc.close()
-        return image_bytes
-    except ImportError:
-        pass
+        return text.strip()
     except Exception as exc:
-        log.warning("pymupdf rendering failed for page %d: %s", page_num, exc)
-        return None
-
-    # Fallback: try pypdf (limited vision support)
-    try:
-        reader = PdfReader(str(pdf_path))
-        if page_num < 0 or page_num >= len(reader.pages):
-            return None
-        # pypdf doesn't have built-in rendering, return None
-        return None
-    except Exception as exc:
-        log.warning("pypdf rendering failed for page %d: %s", page_num, exc)
-        return None
-
-
-def extract_page_with_vision(image_bytes: bytes) -> str | None:
-    """Extract text from page image using Ollama vision API (gemma4:latest).
-
-    Returns extracted text or None if extraction fails.
-    """
-    try:
-        image_b64 = base64.b64encode(image_bytes).decode()
-        response = ollama.chat(
-            model="gemma4:latest",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "You are extracting financial data from an Indian annual report page. Extract all text, tables, and numerical data exactly as shown. For tables, preserve row and column structure using pipe | separators. For charts or graphs, describe the key data points and trends shown. Output plain text only, no markdown formatting."
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{image_b64}"}
-                        }
-                    ]
-                }
-            ],
-            options={"num_ctx": 131072},
-        )
-        return response["message"]["content"]
-    except Exception as exc:
-        log.warning("Ollama vision extraction failed: %s", exc)
-        return None
+        log.warning("OCR failed on page %d: %s", page_num + 1, exc)
+        return ""
 
 
 def find_source_dir(root: Path, ticker: str) -> Path:
@@ -368,7 +276,7 @@ def save_baseline(path: Path, year: str, baseline: dict[str, Any]) -> None:
 
 
 def extract_pdf_pages(pdf_path: Path) -> list[dict[str, Any]]:
-    """Extract pages with hybrid strategy: quality assessment + vision fallback.
+    """Extract text from every PDF page. Use OCR fallback for sparse pages.
 
     Returns list of page dicts with 'page', 'text', and 'extraction_method' keys.
     """
@@ -380,9 +288,7 @@ def extract_pdf_pages(pdf_path: Path) -> list[dict[str, Any]]:
             pass
 
     all_pages: list[dict[str, Any]] = []
-    vision_candidates: list[tuple[int, str]] = []  # (page_number, reason)
 
-    # Phase 1: Extract text from all pages and assess quality
     for page_number, page in enumerate(reader.pages, start=1):
         try:
             text = page.extract_text() or ""
@@ -391,63 +297,23 @@ def extract_pdf_pages(pdf_path: Path) -> list[dict[str, Any]]:
                 text = page.extract_text(extraction_mode="layout") or ""
             except Exception:
                 text = ""
+
         text = re.sub(r"\s+", " ", text.replace("\x00", " ")).strip()
+        extraction_method = "pdfplumber"
 
-        # Bouncer: Skip pages that match blacklisted keywords
-        matched = next((k for k in BLACKLISTED_PAGES if k in text.lower()), None)
-        if matched:
-            log.info("Skipping Page %d (Detected as Noise: %s)", page_number, matched)
-            continue
-
-        # Assess extraction quality
-        surrounding = ""
-        if all_pages:
-            surrounding = all_pages[-1].get("text", "")
-        quality, reason = assess_page_quality(text, surrounding)
+        # If pdfplumber extracted less than 50 chars, try OCR fallback
+        if len(text) < 50:
+            ocr_text = extract_page_with_ocr(pdf_path, page_number - 1)
+            if len(ocr_text) >= 50:
+                text = ocr_text
+                extraction_method = "pytesseract/OCR"
 
         page_data = {
             "page": page_number,
             "text": text,
-            "extraction_method": "pdfplumber",
-            "quality": quality,
-            "quality_reason": reason,
+            "extraction_method": extraction_method,
         }
-
-        if quality == "low":
-            vision_candidates.append((page_number - 1, reason))  # 0-indexed for pypdf
-
         all_pages.append(page_data)
-
-    # Phase 2: Vision extraction for flagged pages (cap at 20)
-    vision_pages_processed = 0
-    max_vision_pages = 20
-
-    for page_idx, reason in vision_candidates[:max_vision_pages]:
-        page_number = page_idx + 1
-        image_bytes = render_page_to_image(pdf_path, page_idx, dpi=150)
-
-        if image_bytes:
-            vision_text = extract_page_with_vision(image_bytes)
-            if vision_text:
-                # Find and update the page in all_pages
-                for pg in all_pages:
-                    if pg["page"] == page_number:
-                        pg["text"] = vision_text
-                        pg["extraction_method"] = "vision/gemma4:26b"
-                        vision_pages_processed += 1
-                        log.info("Page %d: vision/gemma4:26b (quality: low — %s)", page_number, reason)
-                        break
-            else:
-                log.info("Page %d: pdfplumber (quality: low — %s, vision failed)", page_number, reason)
-        else:
-            log.info("Page %d: pdfplumber (quality: low — %s, rendering failed)", page_number, reason)
-
-    # Log summary at the end
-    pdfplumber_count = sum(1 for p in all_pages if p["extraction_method"] == "pdfplumber")
-    vision_count = sum(1 for p in all_pages if p["extraction_method"] == "vision/gemma4:26b")
-    if vision_count > 0 or len(vision_candidates) > max_vision_pages:
-        extra_msg = f" (capped at {max_vision_pages})" if len(vision_candidates) > max_vision_pages else ""
-        log.info("Extraction summary: %d pages pdfplumber | %d pages vision%s", pdfplumber_count, vision_count, extra_msg)
 
     return all_pages
 
@@ -673,9 +539,12 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 def process_report(pdf_paths: list[Path], ticker: str, year: str, raw_root: Path, output_root: Path, models: list[str], skip_llm: bool) -> ReportArtifact:
     """Process one or more PDFs for a given year, with YoY baseline tracking."""
     extracted_text_parts: list[str] = []
+    first_pdf_pages: list[dict[str, Any]] | None = None
 
-    for pdf_path in sorted(pdf_paths):
+    for i, pdf_path in enumerate(sorted(pdf_paths)):
         pages = extract_pdf_pages(pdf_path)
+        if i == 0:
+            first_pdf_pages = pages
         pdf_text = "\n\n".join(
             f"[Page {page['page']}] {page['text']}" for page in pages if str(page.get("text", "")).strip()
         )
@@ -692,7 +561,12 @@ def process_report(pdf_paths: list[Path], ticker: str, year: str, raw_root: Path
     text_path = raw_dir / f"{year}.txt"
     text_path.write_text(extracted_text, encoding="utf-8")
 
-    pages = extract_pdf_pages(pdf_paths[0]) if pdf_paths else []
+    pages = first_pdf_pages if first_pdf_pages else []
+    ocr_count = sum(1 for p in pages if p.get("extraction_method") == "pytesseract/OCR")
+    pdf_names = ", ".join(p.name for p in pdf_paths)
+    log.info("Processing %s %s: %s", ticker, year, pdf_names)
+    log.info("Extracted %d pages, %d used OCR fallback", len(pages), ocr_count)
+    log.info("Saved raw text: %s", text_path)
     chunks = chunk_pages(pages)
     summary_payload: dict[str, Any]
     model_used = "none"
@@ -847,11 +721,37 @@ def discover_reports(source_dir: Path) -> list[tuple[str, list[Path]]]:
     return []
 
 
+def discover_tickers(input_root: Path) -> list[str]:
+    """Return list of ticker folder names found in input_root (actual case on disk)."""
+    if not input_root.is_dir():
+        return []
+    return sorted(d.name for d in input_root.iterdir() if d.is_dir())
+
+
+def list_tickers(input_root: Path, output_root: Path) -> None:
+    """Print all ticker folders with year counts and processed status."""
+    tickers = discover_tickers(input_root)
+    if not tickers:
+        print(f"No ticker folders found in {input_root}")
+        return
+
+    print(f"{'Ticker':<20} {'Years':<8} {'Processed'}")
+    print("-" * 50)
+    for folder_name in tickers:
+        source_dir = input_root / folder_name
+        fy_dirs = [d for d in source_dir.iterdir() if d.is_dir() and d.name.lower().startswith("fy")] if source_dir.is_dir() else []
+        year_count = len(fy_dirs)
+        processed_dir = output_root / folder_name.upper()
+        processed = "yes" if processed_dir.exists() else "no"
+        print(f"{folder_name.upper():<20} {year_count:<8} {processed}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Extract and summarize annual reports into saved artifacts.")
     parser.add_argument("--input-dir", default=str(BASE_DIR / "annual_reports" / "raw"), help="Folder that contains annual report PDFs.")
     parser.add_argument("--output-dir", default=str(BASE_DIR / "annual_reports" / "processed"), help="Folder where extracted text and summaries are saved.")
-    parser.add_argument("--ticker", default="DIXON.NS", help="Ticker label used for the output folder.")
+    parser.add_argument("--ticker", default=None, help="Ticker(s) to process. Comma-separated for multiple. If omitted, all tickers in input-dir are processed.")
+    parser.add_argument("--list", action="store_true", help="List all ticker folders found in input-dir and exit.")
     parser.add_argument(
         "--models",
         nargs="+",
@@ -869,30 +769,50 @@ def main() -> int:
     input_root = Path(args.input_dir)
     output_root = Path(args.output_dir)
 
-    source_dir = find_source_dir(input_root, args.ticker)
-    year_groups = discover_reports(source_dir)
-    if not year_groups:
-        log.error("No PDFs found under %s", source_dir)
-        return 1
+    if args.list:
+        list_tickers(input_root, output_root)
+        return 0
 
-    log.info("Using source directory: %s", source_dir)
-    log.info("Found %d year groups", len(year_groups))
+    # Resolve tickers to process
+    if args.ticker:
+        requested_tickers = [t.strip() for t in args.ticker.split(",")]
+    else:
+        discovered = discover_tickers(input_root)
+        if not discovered:
+            log.error("No ticker folders found in %s", input_root)
+            return 1
+        requested_tickers = discovered
+        log.info("Discovered %d tickers: %s", len(requested_tickers), ", ".join(requested_tickers))
 
-    artifacts: list[ReportArtifact] = []
-    for year, pdf_paths in year_groups:
-        pdf_names = ", ".join(p.name for p in pdf_paths)
-        log.info("Processing %s: %s", year, pdf_names)
-        artifact = process_report(pdf_paths, args.ticker, year, input_root, output_root, args.models, skip_llm)
-        artifacts.append(artifact)
-        log.info(
-            "Saved %s (%d pages, %d chars, model=%s)",
-            artifact.summary_path.name,
-            artifact.page_count,
-            artifact.extracted_chars,
-            artifact.model_used,
-        )
+    # Process each ticker
+    for ticker_input in requested_tickers:
+        source_dir = find_source_dir(input_root, ticker_input)
+        ticker_upper = ticker_input.upper()
+        year_groups = discover_reports(source_dir)
+        if not year_groups:
+            log.warning("[%s] No PDFs found under %s — skipping", ticker_upper, source_dir)
+            continue
 
-    build_index(args.ticker, artifacts, output_root, args.models, skip_llm)
+        log.info("[%s] Using source directory: %s", ticker_upper, source_dir)
+        log.info("[%s] Found %d year groups", ticker_upper, len(year_groups))
+
+        artifacts: list[ReportArtifact] = []
+        for year, pdf_paths in year_groups:
+            pdf_names = ", ".join(p.name for p in pdf_paths)
+            log.info("[%s] Processing %s: %s", ticker_upper, year, pdf_names)
+            artifact = process_report(pdf_paths, ticker_upper, year, input_root, output_root, args.models, skip_llm)
+            artifacts.append(artifact)
+            log.info(
+                "[%s] Saved %s (%d pages, %d chars, model=%s)",
+                ticker_upper,
+                artifact.summary_path.name,
+                artifact.page_count,
+                artifact.extracted_chars,
+                artifact.model_used,
+            )
+
+        build_index(ticker_upper, artifacts, output_root, args.models, skip_llm)
+
     return 0
 
 

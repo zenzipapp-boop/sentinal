@@ -22,6 +22,8 @@ RULES = [
     (["sustainability"],            "sustainability-report.pdf"),
     (["concall", "transcript"],     "concall-transcript.pdf"),
     (["investor", "presentation"],  "investor-presentation.pdf"),
+    (["fy", "isc"],                 "info-sub-co.pdf"),
+    (["fy"],                        "annual-report.pdf"),
 ]
 
 def classify(filename):
@@ -50,35 +52,32 @@ print("\nProcessing...\n")
 matched = 0
 skipped = 0
 
-for year_folder in sorted(SOURCE_DIR.iterdir()):
-    if not year_folder.is_dir():
+for file in sorted(SOURCE_DIR.iterdir()):
+    if file.suffix.lower() != ".pdf":
         continue
 
-    year = extract_year(year_folder.name)
+    year = extract_year(file.name)
     if not year:
-        print(f"SKIPPED folder (can't extract year): {year_folder.name}")
+        print(f"SKIPPED (can't extract year): {file.name}")
+        skipped += 1
         continue
 
-    for file in year_folder.iterdir():
-        if file.suffix.lower() != ".pdf":
-            continue
+    rename_to = classify(file.name)
+    if not rename_to:
+        print(f"SKIPPED (no rule match): {file.name}")
+        skipped += 1
+        continue
 
-        rename_to = classify(file.name)
-        if not rename_to:
-            print(f"SKIPPED (no rule match): {year_folder.name}/{file.name}")
-            skipped += 1
-            continue
+    dest_folder = OUTPUT_BASE / TICKER / f"fy{year}"
+    dest_folder.mkdir(parents=True, exist_ok=True)
+    dest = dest_folder / rename_to
 
-        dest_folder = OUTPUT_BASE / TICKER / f"fy{year}"
-        dest_folder.mkdir(parents=True, exist_ok=True)
-        dest = dest_folder / rename_to
+    if dest.exists():
+        stem = Path(rename_to).stem
+        dest = dest_folder / f"{stem}_2.pdf"
 
-        if dest.exists():
-            stem = Path(rename_to).stem
-            dest = dest_folder / f"{stem}_2.pdf"
-
-        shutil.copy2(file, dest)
-        print(f"{year_folder.name}/{file.name} → fy{year}/{rename_to}")
-        matched += 1
+    shutil.copy2(file, dest)
+    print(f"{file.name} → fy{year}/{rename_to}")
+    matched += 1
 
 print(f"\nDone. {matched} file(s) copied, {skipped} skipped.")
