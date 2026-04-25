@@ -7,6 +7,7 @@ import argparse
 import json
 import logging
 import re
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -85,11 +86,44 @@ REPORT_SUMMARY_SCHEMA: dict[str, Any] = {
         "report_title": {"type": "string"},
         "one_line_summary": {"type": "string"},
         "main_points": {"type": "array", "items": {"type": "string"}},
+        "financial_summary": {
+            "type": "object",
+            "properties": {
+                "revenue": {"type": "string"},
+                "revenue_yoy": {"type": "string"},
+                "net_profit": {"type": "string"},
+                "net_profit_yoy": {"type": "string"},
+                "ebitda_margin": {"type": "string"},
+                "ebitda_margin_yoy": {"type": "string"},
+                "roce": {"type": "string"},
+                "roe": {"type": "string"},
+                "debt_to_equity": {"type": "string"},
+                "eps": {"type": "string"},
+                "eps_yoy": {"type": "string"},
+                "cash_from_operations": {"type": "string"},
+                "capex": {"type": "string"},
+                "free_cash_flow": {"type": "string"},
+            },
+        },
         "financial_trend": {"type": "string"},
         "capex_and_growth": {"type": "array", "items": {"type": "string"}},
         "risks": {"type": "array", "items": {"type": "string"}},
         "thesis_implications": {"type": "array", "items": {"type": "string"}},
         "management_tone": {"type": "string"},
+        "management_commentary_highlights": {"type": "array", "items": {"type": "string"}},
+        "agm_highlights": {"type": "array", "items": {"type": "string"}},
+        "red_flags": {"type": "array", "items": {"type": "string"}},
+        "yoy_highlights": {
+            "type": "object",
+            "properties": {
+                "biggest_improvement": {"type": "string"},
+                "biggest_deterioration": {"type": "string"},
+                "margin_trend": {"type": "string"},
+                "debt_trend": {"type": "string"},
+                "overall_quality_score": {"type": "number"},
+            },
+        },
+        "thesis_impact": {"type": "string"},
         "confidence_score": {"type": "number"},
     },
     "required": [
@@ -152,6 +186,7 @@ def find_source_dir(root: Path, ticker: str) -> Path:
     ]
     for candidate in direct_candidates:
         if candidate.is_dir():
+            log.info("Found ticker folder (direct match): %s", candidate)
             return candidate
 
     for child in root.iterdir():
@@ -159,13 +194,63 @@ def find_source_dir(root: Path, ticker: str) -> Path:
             continue
         label = normalize_label(child.name)
         if label in candidates or any(label in wanted or wanted in label for wanted in candidates):
+            log.info("Found ticker folder (case-insensitive match): %s (normalized: %s)", child, label)
             return child
 
+    log.warning("No matching ticker folder found in %s for ticker %s", root, ticker)
     return root
 
 
 def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
+
+
+def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Write JSON atomically to avoid corruption on failure."""
+    ensure_dir(path.parent)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        delete=False,
+        encoding="utf-8",
+        dir=str(path.parent),
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    ) as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=False)
+        temp_name = handle.name
+    Path(temp_name).replace(path)
+
+
+def load_baseline(path: Path) -> dict[str, dict[str, Any]]:
+    """Load baseline data from JSON, return empty dict if not found."""
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log.warning("Failed to load baseline from %s: %s", path, exc)
+        return {}
+
+
+def extract_numeric_baseline(summary: dict[str, Any]) -> dict[str, Any]:
+    """Extract numeric values from annual report summary for storage in baselines."""
+    baseline: dict[str, Any] = {}
+
+    financial = summary.get("financial_summary", {})
+    if isinstance(financial, dict):
+        for key in ["revenue", "net_profit", "ebitda_margin", "roce", "roe", "debt_to_equity", "eps", "dividend_per_share", "cash_from_operations", "capex", "order_book", "employee_count"]:
+            if key in financial:
+                baseline[key] = str(financial[key])
+
+    return baseline
+
+
+def save_baseline(path: Path, year: str, baseline: dict[str, Any]) -> None:
+    """Save baseline data for a year to baselines.json."""
+    baselines = load_baseline(path)
+    baselines[year] = baseline
+    atomic_write_json(path, baselines)
+    log.info("Saved baseline for %s to %s", year, path)
 
 
 def read_pdf_pages(pdf_path: Path) -> list[dict[str, Any]]:
@@ -308,13 +393,25 @@ Return valid JSON only:
     return parsed
 
 
-def summarize_report(ticker: str, report_name: str, chunk_summaries: list[dict[str, Any]], models: list[str]) -> dict[str, Any]:
+def summarize_report(ticker: str, report_name: str, chunk_summaries: list[dict[str, Any]], models: list[str], prior_baseline: dict[str, Any] | None = None) -> dict[str, Any]:
+    prior_section = ""
+    if prior_baseline:
+        prior_section = f"""
+PRIOR YEAR FINANCIALS (FY{int(report_name[2:]) - 1 if report_name.startswith('FY') else 'N/A'}):
+{json.dumps(prior_baseline, indent=2, ensure_ascii=False)}
+
+Using these prior year numbers compute exact YoY changes for all key financial metrics. Express as absolute change and percentage change. Flag any metric that deteriorated significantly.
+"""
+
     prompt = f"""You are a Forensic Equity Auditor synthesizing annual-report chunks into a comprehensive investor thesis.
 
 Company: {ticker}
 Report: {report_name}
+{prior_section}
 
 Investigate discrepancies between management claims and actual results. Cross-reference numbers across sections. Flag inconsistencies.
+
+Extract structured financial metrics with YoY comparison where available. Identify key management commentary from MD&A or Chairman's letter. Extract AGM discussion points. Highlight red flags and thesis implications.
 
 Chunk summaries:
 {json.dumps(chunk_summaries, indent=2, ensure_ascii=False)}
@@ -324,15 +421,45 @@ Return valid JSON only:
   "report_title": "short report title",
   "one_line_summary": "one sentence thesis or key finding",
   "main_points": ["point 1", "point 2"],
+  "financial_summary": {{
+    "revenue": "string",
+    "revenue_yoy": "string — e.g. +18.2% or N/A",
+    "net_profit": "string",
+    "net_profit_yoy": "string",
+    "ebitda_margin": "string",
+    "ebitda_margin_yoy": "string — e.g. expanded 120bps or contracted 80bps",
+    "roce": "string",
+    "roe": "string",
+    "debt_to_equity": "string",
+    "eps": "string",
+    "eps_yoy": "string",
+    "cash_from_operations": "string",
+    "capex": "string",
+    "free_cash_flow": "string",
+    "dividend_per_share": "string",
+    "order_book": "string if applicable, else N/A",
+    "employee_count": "string if mentioned, else N/A"
+  }},
   "financial_trend": "detailed description of revenue/margin/cash flow direction and quality of earnings",
+  "yoy_highlights": {{
+    "biggest_improvement": "which metric improved most and by how much",
+    "biggest_deterioration": "which metric worsened most and by how much",
+    "margin_trend": "expanding/contracting/stable",
+    "debt_trend": "increasing/decreasing/stable",
+    "overall_quality_score": "1-10 where 10 = strongest YoY improvement"
+  }},
   "capex_and_growth": ["capex or growth note with forensic implications"],
   "risks": ["material risk 1", "material risk 2"],
+  "red_flags": ["any concerning trend or disclosure found in the annual report"],
   "thesis_implications": ["implication 1", "implication 2", "implication 3"],
   "management_tone": "bullish/cautious/mixed and credibility assessment",
+  "management_commentary_highlights": ["key point 1 from MD&A or chairman letter", "key point 2", "key point 3"],
+  "agm_highlights": ["key resolution or discussion point from AGM transcript if available", "key point 2"],
+  "thesis_impact": "one paragraph on how this annual report strengthens or weakens a long-term investment thesis for this company",
   "confidence_score": 1-10
 }}"""
 
-    parsed, raw, model_used = generate_with_fallback(prompt, models, REPORT_SUMMARY_SCHEMA, num_predict=2048)
+    parsed, raw, model_used = generate_with_fallback(prompt, models, REPORT_SUMMARY_SCHEMA, num_predict=3500)
     parsed["raw"] = raw
     parsed["model"] = model_used
     parsed["report_name"] = report_name
@@ -373,7 +500,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def process_report(pdf_paths: list[Path], ticker: str, year: str, raw_root: Path, output_root: Path, models: list[str], skip_llm: bool) -> ReportArtifact:
-    """Process one or more PDFs for a given year, concatenating with source labels."""
+    """Process one or more PDFs for a given year, with YoY baseline tracking."""
     extracted_text_parts: list[str] = []
 
     for pdf_path in sorted(pdf_paths):
@@ -399,6 +526,12 @@ def process_report(pdf_paths: list[Path], ticker: str, year: str, raw_root: Path
     summary_payload: dict[str, Any]
     model_used = "none"
 
+    # Load prior year baseline for YoY comparison
+    baseline_path = ticker_dir / "baselines.json"
+    baselines = load_baseline(baseline_path)
+    prior_year = f"fy{int(year[2:]) - 1}"
+    prior_baseline = baselines.get(prior_year, {}) if not skip_llm else None
+
     if skip_llm:
         summary_payload = {
             "report_title": year,
@@ -414,9 +547,14 @@ def process_report(pdf_paths: list[Path], ticker: str, year: str, raw_root: Path
         }
     else:
         chunk_summaries = [summarize_chunk(ticker, year, chunk, models) for chunk in chunks or [{"page_start": 1, "page_end": 1, "text": extracted_text[:20000]}]]
-        summary_payload = summarize_report(ticker, year, chunk_summaries, models)
+        summary_payload = summarize_report(ticker, year, chunk_summaries, models, prior_baseline=prior_baseline)
         summary_payload["chunk_summaries"] = chunk_summaries
         model_used = str(summary_payload.get("model", models[0] if models else "unknown"))
+
+        # Extract and save baseline for next year's processing
+        extracted_baseline = extract_numeric_baseline(summary_payload)
+        if extracted_baseline:
+            save_baseline(baseline_path, year, extracted_baseline)
 
     summary_payload.update(
         {
@@ -508,7 +646,7 @@ def build_index(ticker: str, artifacts: list[ReportArtifact], output_root: Path,
 
 
 def discover_reports(source_dir: Path) -> list[tuple[str, list[Path]]]:
-    """Discover PDFs grouped by year folder (fy*) or single PDFs.
+    """Discover PDFs grouped by year folder (fy* case-insensitive) or single PDFs.
     Returns list of (year_label, pdf_paths) tuples."""
     reports: list[tuple[str, list[Path]]] = []
 
@@ -519,8 +657,8 @@ def discover_reports(source_dir: Path) -> list[tuple[str, list[Path]]]:
     if not source_dir.is_dir():
         return []
 
-    # Look for fy* subdirectories
-    fy_dirs = sorted([d for d in source_dir.iterdir() if d.is_dir() and d.name.startswith("fy")])
+    # Look for fy* subdirectories (case-insensitive)
+    fy_dirs = sorted([d for d in source_dir.iterdir() if d.is_dir() and d.name.lower().startswith("fy")], key=lambda d: d.name.lower())
 
     if fy_dirs:
         # Multi-file per year structure

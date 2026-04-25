@@ -7,6 +7,7 @@ import argparse
 import json
 import logging
 import re
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -23,6 +24,8 @@ logging.basicConfig(
 )
 log = logging.getLogger("budget-processor")
 SKIP_LLM_PLACEHOLDER = "raw text extracted"
+
+BASE_DIR = Path(__file__).parent.resolve()
 
 
 @dataclass
@@ -65,7 +68,9 @@ BUDGET_SUMMARY_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "sector": {"type": "string"},
                     "allocation": {"type": "string"},
-                    "yoy_change": {"type": "string"},
+                    "yoy_change_pct": {"type": "string"},
+                    "yoy_change_abs": {"type": "string"},
+                    "yoy_direction": {"type": "string"},
                     "key_programs": {"type": "array", "items": {"type": "string"}},
                     "equity_impact": {"type": "string"},
                 },
@@ -140,6 +145,53 @@ BUDGET_SUMMARY_SCHEMA: dict[str, Any] = {
                 },
             },
         },
+        "yoy_analysis": {
+            "type": "object",
+            "properties": {
+                "capex_change": {"type": "string"},
+                "deficit_change": {"type": "string"},
+                "biggest_increase": {
+                    "type": "object",
+                    "properties": {
+                        "sector": {"type": "string"},
+                        "change": {"type": "string"},
+                    },
+                },
+                "biggest_decrease": {
+                    "type": "object",
+                    "properties": {
+                        "sector": {"type": "string"},
+                        "change": {"type": "string"},
+                    },
+                },
+                "new_schemes": {"type": "array", "items": {"type": "string"}},
+                "discontinued_schemes": {"type": "array", "items": {"type": "string"}},
+            },
+        },
+        "sentiment_analysis": {
+            "type": "object",
+            "properties": {
+                "overall_sentiment": {"type": "string"},
+                "overall_score": {"type": "number"},
+                "rationale": {"type": "string"},
+                "sector_scores": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "sector": {"type": "string"},
+                            "score": {"type": "number"},
+                            "sentiment": {"type": "string"},
+                            "key_reason": {"type": "string"},
+                            "top_beneficiary_companies": {"type": "array", "items": {"type": "string"}},
+                            "scale": {"type": "string"},
+                        },
+                    },
+                },
+                "top_3_beneficiary_sectors": {"type": "array", "items": {"type": "string"}},
+                "top_3_hurt_sectors": {"type": "array", "items": {"type": "string"}},
+            },
+        },
         "confidence_score": {"type": "number"},
     },
     "required": [
@@ -167,6 +219,90 @@ def normalize_label(value: str) -> str:
 
 def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
+
+
+def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Write JSON atomically to avoid corruption on failure."""
+    ensure_dir(path.parent)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        delete=False,
+        encoding="utf-8",
+        dir=str(path.parent),
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    ) as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=False)
+        temp_name = handle.name
+    Path(temp_name).replace(path)
+
+
+def load_baseline(path: Path) -> dict[str, dict[str, Any]]:
+    """Load baseline data from JSON, return empty dict if not found."""
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log.warning("Failed to load baseline from %s: %s", path, exc)
+        return {}
+
+
+def extract_numeric_baseline(summary: dict[str, Any]) -> dict[str, str]:
+    """Extract numeric values from budget summary for storage in baselines."""
+    baseline = {}
+
+    if "fiscal_deficit_gdp" in summary:
+        baseline["fiscal_deficit_gdp"] = str(summary["fiscal_deficit_gdp"])
+        log.info("  → fiscal_deficit_gdp: %s", baseline["fiscal_deficit_gdp"])
+    if "capex_outlay" in summary:
+        baseline["capex_outlay"] = str(summary["capex_outlay"])
+        log.info("  → capex_outlay: %s", baseline["capex_outlay"])
+
+    sector_allocs = {}
+    for sector in summary.get("sector_allocations", []):
+        if isinstance(sector, dict):
+            sector_name = sector.get("sector", "")
+            allocation = sector.get("allocation", "")
+            if sector_name and allocation:
+                sector_allocs[sector_name] = allocation
+                log.info("  → sector %s: %s", sector_name, allocation)
+    if sector_allocs:
+        baseline["sector_allocations"] = sector_allocs
+
+    pli_allocs = {}
+    for scheme in summary.get("pli_schemes", []):
+        if isinstance(scheme, dict):
+            name = scheme.get("scheme_name", "")
+            alloc = scheme.get("allocation", "")
+            if name and alloc:
+                pli_allocs[name] = alloc
+                log.info("  → PLI scheme %s: %s", name, alloc)
+    if pli_allocs:
+        baseline["pli_schemes"] = pli_allocs
+
+    import_duties = {}
+    for duty in summary.get("import_duty_changes", []):
+        if isinstance(duty, dict):
+            item = duty.get("item", "")
+            rate = duty.get("new_rate", "")
+            if item and rate:
+                import_duties[item] = rate
+                log.info("  → import duty %s: %s", item, rate)
+    if import_duties:
+        baseline["import_duty_changes"] = import_duties
+
+    return baseline
+
+
+def save_baseline(path: Path, year: str, baseline: dict[str, str]) -> None:
+    """Save baseline data for a year to baselines.json."""
+    baselines = load_baseline(path)
+    baselines[year] = baseline
+    atomic_write_json(path, baselines)
+    log.info("Saved baseline for %s to %s", year, path)
+    log.info("Complete baselines.json contents:")
+    log.info(json.dumps(baselines, indent=2, ensure_ascii=False))
 
 
 def read_pdf_pages(pdf_path: Path) -> list[dict[str, Any]]:
@@ -270,18 +406,36 @@ def generate_with_fallback(
     raise RuntimeError(last_error or "No Ollama model could summarize the budget")
 
 
-def summarize_budget(year: str, extracted_text: str, models: list[str]) -> dict[str, Any]:
+def summarize_budget(year: str, extracted_text: str, models: list[str], prior_baseline: dict[str, str] | None = None) -> dict[str, Any]:
+    prior_section = ""
+    if prior_baseline:
+        prior_section = f"""
+PRIOR YEAR BASELINE (FY{int(year[2:]) - 1}):
+{json.dumps(prior_baseline, indent=2, ensure_ascii=False)}
+
+Using the above baseline, compute exact YoY changes for every allocation and metric where prior year data exists. Express as:
+- Absolute change in crores
+- Percentage change
+- Direction: increased/decreased/unchanged
+"""
+
     prompt = f"""You are a senior equity research analyst extracting budget intelligence for stock market impact analysis. Extract every detail that could affect listed Indian companies. Be specific about scheme names, allocation amounts, and which sectors or companies benefit or are hurt. Do not summarize vaguely — extract concrete numbers and named schemes.
 
 Year: {year}
+{prior_section}
 
 CRITICAL EXTRACTIONS:
-- Every PLI scheme mentioned with allocation amounts and eligible sectors
+- Every PLI scheme mentioned with allocation amounts and eligible sectors. IMPORTANT: PLI (Production Linked Incentive) schemes are ONLY manufacturing incentive programs where companies receive incentives based on incremental production output. Examples: PLI for Semiconductors, PLI for Mobile Manufacturing, PLI for Pharmaceuticals, PLI for Solar PV, PLI for White Goods. Do NOT classify agriculture subsidies, crop insurance, or farmer welfare schemes like PM-Kisan, MISS, or crop insurance as PLI schemes. If no genuine PLI schemes are found in the budget, return an empty array.
 - Every import duty change with old and new rates, and which sectors/companies are affected
 - Which listed Indian companies or sectors directly benefit or are hurt by each major allocation
 - Infrastructure capex programs with specific amounts and key projects
 - Any changes to capital gains tax, STT, or corporate tax rates and their market impact
 - Sector-specific regulatory changes embedded in the budget
+
+SENTIMENT & SCORING INSTRUCTIONS:
+Score each sector from 1-10 based on net budget impact where 10 means transformative positive impact and 1 means severely negative impact. Consider both direct allocations and indirect effects like import duty changes, tax policy, and regulatory signals. Identify specific listed Indian companies that are most likely to benefit from each sector's budget treatment. Be specific — name actual companies where possible.
+
+For the overall budget sentiment: Assess from positive/negative/neutral perspective, rate 1-10 where 10 is most market-positive. Provide 2-3 sentences on overall budget market impact.
 
 TEXT:
 {extracted_text[:16000]}
@@ -307,7 +461,9 @@ Return valid JSON only with complete and specific details (no vague summaries):
     {{
       "sector": "sector name",
       "allocation": "amount in crores",
-      "yoy_change": "% change vs prior year",
+      "yoy_change_pct": "e.g. +12.3% or -5.1% or N/A if no prior data",
+      "yoy_change_abs": "e.g. +15000 crores or N/A",
+      "yoy_direction": "increased/decreased/unchanged/new/N/A",
       "key_programs": ["specific schemes funded"],
       "equity_impact": "which listed companies or sub-sectors benefit"
     }}
@@ -357,11 +513,35 @@ Return valid JSON only with complete and specific details (no vague summaries):
       "notes": "any conditions"
     }}
   ],
+  "yoy_analysis": {{
+    "capex_change": "string describing capex direction and magnitude",
+    "deficit_change": "string describing deficit direction",
+    "biggest_increase": {{"sector": "sector with largest increase", "change": "magnitude and %"}},
+    "biggest_decrease": {{"sector": "sector with largest decrease", "change": "magnitude and %"}},
+    "new_schemes": ["schemes that did not exist in prior year"],
+    "discontinued_schemes": ["schemes from prior year not in this year"]
+  }},
+  "sentiment_analysis": {{
+    "overall_sentiment": "positive/negative/neutral",
+    "overall_score": "1-10 where 10 is most market positive",
+    "rationale": "2-3 sentences on overall budget market impact",
+    "sector_scores": [
+      {{
+        "sector": "string",
+        "score": "1-10 where 10 = maximum benefit",
+        "sentiment": "strongly_positive/positive/neutral/negative/strongly_negative",
+        "key_reason": "one sentence on why this score",
+        "top_beneficiary_companies": ["listed Indian companies most likely to benefit"],
+        "scale": "transformative/significant/moderate/marginal"
+      }}
+    ],
+    "top_3_beneficiary_sectors": ["sector1", "sector2", "sector3"],
+    "top_3_hurt_sectors": ["sector1", "sector2", "sector3"]
+  }},
   "confidence_score": 1-10
 }}"""
 
-    parsed, raw, model_used = generate_with_fallback(prompt, models, BUDGET_SUMMARY_SCHEMA, num_predict=3000)
-    parsed["raw"] = raw
+    parsed, raw, model_used = generate_with_fallback(prompt, models, BUDGET_SUMMARY_SCHEMA, num_predict=4000)
     parsed["model"] = model_used
     return parsed
 
@@ -372,7 +552,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def process_budget(pdf_paths: list[Path], year: str, output_root: Path, models: list[str], skip_llm: bool) -> BudgetArtifact:
-    """Process one or more budget PDFs for a given year."""
+    """Process one or more budget PDFs for a given year, with YoY baseline tracking."""
     extracted_text_parts: list[str] = []
 
     for pdf_path in sorted(pdf_paths):
@@ -396,6 +576,16 @@ def process_budget(pdf_paths: list[Path], year: str, output_root: Path, models: 
     summary_payload: dict[str, Any]
     model_used = "none"
 
+    # Load prior year baseline for YoY comparison
+    baseline_path = output_root / "baselines.json"
+    baselines = load_baseline(baseline_path)
+    prior_year = f"fy{int(year[2:]) - 1}"
+    prior_baseline = baselines.get(prior_year, {}) if not skip_llm else None
+
+    if prior_baseline:
+        log.info("Loaded prior year baseline for %s:", prior_year)
+        log.info(json.dumps(prior_baseline, indent=2, ensure_ascii=False))
+
     if skip_llm:
         summary_payload = {
             "budget_title": year,
@@ -408,13 +598,26 @@ def process_budget(pdf_paths: list[Path], year: str, output_root: Path, models: 
             "source_files": [p.name for p in pdf_paths],
         }
     else:
-        summary_payload = summarize_budget(year, extracted_text, models)
+        summary_payload = summarize_budget(year, extracted_text, models, prior_baseline=prior_baseline)
         model_used = str(summary_payload.get("model", models[0] if models else "unknown"))
         summary_payload["source_files"] = [p.name for p in pdf_paths]
 
+        # Extract and save baseline for next year's processing
+        extracted_baseline = extract_numeric_baseline(summary_payload)
+        if extracted_baseline:
+            save_baseline(baseline_path, year, extracted_baseline)
+
+    relative_pdf_paths = []
+    for p in pdf_paths:
+        try:
+            rel_path = p.relative_to(BASE_DIR)
+        except ValueError:
+            rel_path = p
+        relative_pdf_paths.append(str(rel_path))
+
     summary_payload.update(
         {
-            "pdf_paths": [str(p) for p in pdf_paths],
+            "pdf_paths": relative_pdf_paths,
             "page_count": len(pages),
             "extracted_chars": len(extracted_text),
             "extraction_quality": "good" if len(extracted_text) > 2000 else "limited",
@@ -527,8 +730,8 @@ def discover_budgets(source_dir: Path) -> list[tuple[str, list[Path]]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Extract and summarize government budgets into saved artifacts.")
-    parser.add_argument("--input-dir", default="govt_budgets/raw", help="Folder containing budget PDFs named as FY##.pdf (e.g., FY26.pdf).")
-    parser.add_argument("--output-dir", default="govt_budgets/processed", help="Folder where extracted text and summaries are saved.")
+    parser.add_argument("--input-dir", default=str(BASE_DIR / "govt_budgets" / "raw"), help="Folder containing budget PDFs named as FY##.pdf (e.g., FY26.pdf).")
+    parser.add_argument("--output-dir", default=str(BASE_DIR / "govt_budgets" / "processed"), help="Folder where extracted text and summaries are saved.")
     parser.add_argument(
         "--year",
         help="Process only a specific year (e.g., fy26). If not specified, processes all years.",

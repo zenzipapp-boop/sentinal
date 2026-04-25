@@ -565,12 +565,97 @@ def load_annual_report_context(ticker: str, limit: int = 2200, *, report_root: P
         ANNUAL_REPORT_CONTEXT_WARNINGS[ticker] = warning_text
         log.warning(warning_text)
 
+    def _format_rich_report(report: dict[str, Any], year: str) -> str:
+        """Format a report with richer financial and thesis data."""
+        lines = [f"\n{year}:"]
+
+        financial = report.get("financial_summary", {})
+        if isinstance(financial, dict):
+            revenue = financial.get("revenue")
+            revenue_yoy = financial.get("revenue_yoy")
+            if revenue:
+                lines.append(f"Revenue: {revenue}" + (f" ({revenue_yoy} YoY)" if revenue_yoy and revenue_yoy != "N/A" else ""))
+
+            net_profit = financial.get("net_profit")
+            net_profit_yoy = financial.get("net_profit_yoy")
+            if net_profit:
+                lines.append(f"Net Profit: {net_profit}" + (f" ({net_profit_yoy} YoY)" if net_profit_yoy and net_profit_yoy != "N/A" else ""))
+
+            ebitda_margin = financial.get("ebitda_margin")
+            ebitda_margin_yoy = financial.get("ebitda_margin_yoy")
+            if ebitda_margin:
+                lines.append(f"EBITDA Margin: {ebitda_margin}" + (f" ({ebitda_margin_yoy})" if ebitda_margin_yoy and ebitda_margin_yoy != "N/A" else ""))
+
+            roce = financial.get("roce")
+            roe = financial.get("roe")
+            de = financial.get("debt_to_equity")
+            metrics = []
+            if roce:
+                metrics.append(f"ROCE: {roce}")
+            if roe:
+                metrics.append(f"ROE: {roe}")
+            if de:
+                metrics.append(f"D/E: {de}")
+            if metrics:
+                lines.append(" | ".join(metrics))
+
+            eps = financial.get("eps")
+            eps_yoy = financial.get("eps_yoy")
+            if eps:
+                lines.append(f"EPS: {eps}" + (f" ({eps_yoy} YoY)" if eps_yoy and eps_yoy != "N/A" else ""))
+
+            fcf = financial.get("free_cash_flow")
+            if fcf:
+                lines.append(f"FCF: {fcf}")
+
+        yoy = report.get("yoy_highlights", {})
+        if isinstance(yoy, dict):
+            margin_trend = yoy.get("margin_trend")
+            debt_trend = yoy.get("debt_trend")
+            quality_score = yoy.get("overall_quality_score")
+            trends = []
+            if margin_trend and margin_trend != "N/A":
+                trends.append(f"Margin Trend: {margin_trend}")
+            if debt_trend and debt_trend != "N/A":
+                trends.append(f"Debt Trend: {debt_trend}")
+            if quality_score is not None:
+                trends.append(f"Quality Score: {quality_score}/10")
+            if trends:
+                lines.append(" | ".join(trends))
+
+        mgmt_highlights = report.get("management_commentary_highlights", [])
+        if mgmt_highlights:
+            lines.append("\nKey Management Points:")
+            for point in mgmt_highlights[:2]:
+                if point and point.strip():
+                    lines.append(f"  • {point}")
+
+        agm_highlights = report.get("agm_highlights", [])
+        if agm_highlights:
+            lines.append("\nAGM Highlights:")
+            for point in agm_highlights[:2]:
+                if point and point.strip():
+                    lines.append(f"  • {point}")
+
+        red_flags = report.get("red_flags", [])
+        if red_flags:
+            lines.append("\nRed Flags:")
+            for flag in red_flags[:2]:
+                if flag and flag.strip():
+                    lines.append(f"  • {flag}")
+
+        thesis_impact = report.get("thesis_impact")
+        if thesis_impact and thesis_impact.strip():
+            lines.append(f"\nThesis Impact: {thesis_impact[:200]}...")
+
+        return "\n".join(lines)
+
     index_path = report_root / "index.json"
     if index_path.exists():
         try:
             payload = json.loads(index_path.read_text(encoding="utf-8"))
             if isinstance(payload, dict):
-                reports = payload.get("reports")
+                reports = payload.get("reports", [])
                 years = payload.get("years", [])
 
                 if isinstance(reports, list) and reports:
@@ -580,44 +665,43 @@ def load_annual_report_context(ticker: str, limit: int = 2200, *, report_root: P
                     else:
                         ANNUAL_REPORT_CONTEXT_WARNINGS.pop(ticker, None)
 
-                    recent_reports = reports[:annual_report_years] if years else reports[:annual_report_years]
-                else:
-                    ANNUAL_REPORT_CONTEXT_WARNINGS.pop(ticker, None)
-                    recent_reports = []
+                    formatted_reports = []
+                    for report, year in zip(reports[:annual_report_years], years[:annual_report_years]):
+                        if isinstance(report, dict):
+                            formatted_reports.append(_format_rich_report(report, str(year)))
+
+                    if formatted_reports:
+                        context = f"{ticker} ANNUAL REPORT CONTEXT — MOST RECENT {len(formatted_reports)} YEARS\n"
+                        context += "\n".join(formatted_reports)
+                        return context[:limit]
 
                 for key in ("combined_summary", "summary", "annual_report_summary"):
                     value = payload.get(key)
                     if value and not _is_placeholder_summary(value):
                         return _compact_json(value, limit=limit) if isinstance(value, (dict, list)) else str(value)[:limit]
 
-                if recent_reports:
-                    return _compact_json({"reports": recent_reports}, limit=limit)
         except Exception as exc:
             log.warning("[%s] Failed to read annual report index: %s", ticker, exc)
             ANNUAL_REPORT_CONTEXT_WARNINGS.pop(ticker, None)
 
-    summary_files = sorted((report_root / "summaries").glob("*.json"))
-    collected: list[dict[str, Any]] = []
+    summary_files = sorted((report_root / "summaries").glob("*.json"), reverse=True)
+    collected: list[str] = []
     for path in summary_files[:annual_report_years]:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
         if isinstance(payload, dict):
-            collected.append(
-                {
-                    "file": path.name,
-                    "report_title": payload.get("report_title", path.stem),
-                    "one_line_summary": payload.get("one_line_summary", payload.get("summary", "")),
-                    "main_points": payload.get("main_points", []),
-                    "risks": payload.get("risks", payload.get("risk_flags", [])),
-                    "thesis_implications": payload.get("thesis_implications", []),
-                }
-            )
+            year = path.stem
+            formatted = _format_rich_report(payload, year)
+            collected.append(formatted)
 
     if collected:
         ANNUAL_REPORT_CONTEXT_WARNINGS.pop(ticker, None)
-        return _compact_json({"reports": collected}, limit=limit)
+        context = f"{ticker} ANNUAL REPORT CONTEXT — MOST RECENT {len(collected)} YEARS\n"
+        context += "\n".join(collected)
+        return context[:limit]
+
     ANNUAL_REPORT_CONTEXT_WARNINGS.pop(ticker, None)
     return "No annual report summary available."
 
