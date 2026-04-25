@@ -388,7 +388,7 @@ def generate_with_fallback(
     last_error = ""
     for model in models:
         try:
-            effective_ctx = 96000 if model == "gemma4:latest" else num_ctx
+            effective_ctx = 131072
             raw = ollama_generate(
                 model,
                 prompt,

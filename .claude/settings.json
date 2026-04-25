@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "additionalDirectories": [
+      "/tmp"
+    ],
+    "allow": [
+      "Bash(bash /tmp/run_analysis.sh)"
+    ]
+  }
+}

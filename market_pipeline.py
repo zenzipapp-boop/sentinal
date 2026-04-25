@@ -2741,7 +2741,7 @@ def ollama_generate(
     prompt: str,
     num_predict: int = 1200,
     format_schema: dict[str, Any] | str | None = None,
-    num_ctx: int = 8192,
+    num_ctx: int = 131072,
     temperature: float = 0.0,
 ) -> str:
     options = {
@@ -2930,7 +2930,7 @@ def run_screener(ticker: str, ohlcv: dict, news: list, fundamentals: dict, *,
         news=news_text,
     )
     log_prompt_context_length(ticker, 1, prompt)
-    raw = ollama_generate(model, prompt, num_predict=1000, format_schema=SCREENER_OUTPUT_SCHEMA)
+    raw = ollama_generate(model, prompt, num_predict=1000, format_schema=SCREENER_OUTPUT_SCHEMA, num_ctx=131072)
     result = extract_json(raw)
     result["raw"] = raw
     result["prompt"] = prompt
@@ -3060,7 +3060,7 @@ def run_thesis(ticker: str, ohlcv: dict, screener: dict,
         fundamentals=fund_text,
     )
     log_prompt_context_length(ticker, 2, prompt)
-    raw = ollama_generate(model, prompt, num_predict=1500, format_schema=THESIS_OUTPUT_SCHEMA)
+    raw = ollama_generate(model, prompt, num_predict=1500, format_schema=THESIS_OUTPUT_SCHEMA, num_ctx=131072)
     result = extract_json(raw)
     result["raw"] = raw
     result["prompt"] = prompt
@@ -3228,7 +3228,7 @@ def run_auditor(ticker: str, ohlcv: dict, sat: dict,
         week=f"{TODAY} (Week {WEEK_NO})",
     )
     log_prompt_context_length(ticker, 3, prompt)
-    raw = ollama_generate(model, prompt, num_predict=1400, format_schema=AUDITOR_OUTPUT_SCHEMA)
+    raw = ollama_generate(model, prompt, num_predict=1400, format_schema=AUDITOR_OUTPUT_SCHEMA, num_ctx=131072)
     result = extract_json(raw)
     result["raw"] = raw
     result["prompt"] = prompt
@@ -3324,7 +3324,7 @@ def run_weekly_portfolio_memo(results: list[dict[str, Any]], allocations: dict[s
         allocations=_compact_json(allocation_snapshot, limit=8000),
     )
     log_prompt_context_length("PORTFOLIO", 4, prompt)
-    memo = ollama_generate(model, prompt, num_predict=1200)
+    memo = ollama_generate(model, prompt, num_predict=1200, num_ctx=131072)
     return memo.strip()
 
 
