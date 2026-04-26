@@ -371,7 +371,7 @@ def generate_with_fallback(
     models: list[str],
     schema: dict[str, Any],
     num_predict: int,
-    num_ctx: int = 32768,
+    num_ctx: int = 131072,
     temperature: float = 0.1,
 ) -> tuple[dict[str, Any], str, str]:
     last_error = ""

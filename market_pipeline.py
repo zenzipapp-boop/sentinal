@@ -220,22 +220,6 @@ def current_week_key() -> str:
     return f"{datetime.now().year}-W{WEEK_NO:02d}"
 
 
-def _safe_float(value: Any, default: float | None = None) -> float | None:
-    try:
-        if value is None:
-            return default
-        if isinstance(value, str):
-            value = value.strip().replace(",", "")
-            if value == "":
-                return default
-        number = float(value)
-        if number != number:
-            return default
-        return number
-    except Exception:
-        return default
-
-
 def _safe_int(value: Any, default: int | None = None) -> int | None:
     try:
         if value is None:
@@ -817,7 +801,7 @@ def load_budget_context(years: int = 2, limit: int = 1500) -> str:
     return "No budget data available. Proceed without macro budget context."
 
 
-def _safe_float(value: Any, default: float = 0.0) -> float:
+def _safe_float(value: Any, default: float | None = 0.0) -> float | None:
     """Convert value to float safely, handling string formatting with %, etc."""
     if value is None:
         return default
@@ -836,7 +820,8 @@ def _find_row_value(rows: list[dict[str, Any]], label: str, col_index: int = 1) 
             if row_label and label.lower() in row_label.lower():
                 cols = list(row.values())
                 if col_index < len(cols):
-                    return _safe_float(cols[col_index])
+                    result = _safe_float(cols[col_index], 0.0)
+                    return result if result is not None else 0.0
     return 0.0
 
 
@@ -884,7 +869,7 @@ def compute_quantitative_scores(ticker: str, screener_data: dict[str, Any]) -> s
 
         # Profitability Signals (4)
         # 1. ROA positive this year
-        roe = _safe_float(top_ratios.get('ROE', '0%'))
+        roe = _safe_float(top_ratios.get('ROE', '0%'), 0.0) or 0.0
         roa = _find_row_value(ratios_rows, 'ROA', curr_col)
         if roa > 0:
             f_profitability += 1
@@ -972,9 +957,9 @@ def compute_quantitative_scores(ticker: str, screener_data: dict[str, Any]) -> s
         if not is_financial:
             # Get market cap from top_ratios
             market_cap_str = top_ratios.get('Market Cap', '₹ 0 Cr.')
-            market_cap = _safe_float(market_cap_str.replace('₹', '').replace('Cr.', '').replace('Lakh', '').strip())
+            market_cap = _safe_float(market_cap_str.replace('₹', '').replace('Cr.', '').replace('Lakh', '').strip(), 0.0) or 0.0
 
-            current_price = _safe_float(top_ratios.get('Current Price', '0').replace('₹', '').strip())
+            current_price = _safe_float(top_ratios.get('Current Price', '0').replace('₹', '').strip(), 0.0) or 0.0
 
             wc = _find_row_value(bs_rows, 'Current Assets', curr_col) - _find_row_value(bs_rows, 'Current Liabilities', curr_col)
             retained_earnings = _find_row_value(bs_rows, 'Reserves', curr_col)
@@ -1010,6 +995,13 @@ def compute_quantitative_scores(ticker: str, screener_data: dict[str, Any]) -> s
     # ═════════════════════════════════════════════════════════════
 
     try:
+        revenue_curr = _find_row_value(pl_rows, 'Sales', curr_col)
+        revenue_prior = _find_row_value(pl_rows, 'Sales', prior_col)
+        assets_curr = _find_row_value(bs_rows, 'Total Assets', curr_col)
+        assets_prior = _find_row_value(bs_rows, 'Total Assets', prior_col)
+        wc_curr = _find_row_value(ratios_rows, 'Working Capital Days', curr_col)
+        wc_prior = _find_row_value(ratios_rows, 'Working Capital Days', prior_col)
+
         net_profit_curr = _find_row_value(pl_rows, 'Net Profit', curr_col)
         net_profit_prior = _find_row_value(pl_rows, 'Net Profit', prior_col)
 
@@ -1118,9 +1110,9 @@ def format_peer_comparison(ticker: str, screener_data: dict[str, Any]) -> str:
         key_ratios = screener_data.get('key_ratios', {})
         top_ratios = {r['name']: r['value'] for r in key_ratios.get('top_ratios', []) if isinstance(r, dict)}
 
-        pe = _safe_float(top_ratios.get('Stock P/E', '0'))
-        roe = _safe_float(top_ratios.get('ROE', '0%'))
-        roce = _safe_float(top_ratios.get('ROCE', '0%'))
+        pe = _safe_float(top_ratios.get('Stock P/E', '0'), 0.0) or 0.0
+        roe = _safe_float(top_ratios.get('ROE', '0%'), 0.0) or 0.0
+        roce = _safe_float(top_ratios.get('ROCE', '0%'), 0.0) or 0.0
 
         ticker_display = f"★ {ticker}".ljust(17)
         output.append(f"  {ticker_display} {pe:>4.0f}x {roe:>5.1f}% {roce:>5.1f}% {'N/A':>5} {'N/A':>5} {'N/A':>3}")
@@ -1131,9 +1123,9 @@ def format_peer_comparison(ticker: str, screener_data: dict[str, Any]) -> str:
             if isinstance(peer, dict):
                 company = peer.get('company', 'N/A')
                 company_display = company[:17].ljust(17)
-                pe = _safe_float(peer.get('pe', '0'))
-                roe = _safe_float(peer.get('roe', '0%'))
-                roce = _safe_float(peer.get('roce', '0%'))
+                pe = _safe_float(peer.get('pe', '0'), 0.0) or 0.0
+                roe = _safe_float(peer.get('roe', '0%'), 0.0) or 0.0
+                roce = _safe_float(peer.get('roce', '0%'), 0.0) or 0.0
                 rev_gr = peer.get('revenue_growth', 'N/A')
                 pat_gr = peer.get('profit_growth', 'N/A')
                 de = peer.get('debt_equity', 'N/A')
@@ -1147,7 +1139,7 @@ def format_peer_comparison(ticker: str, screener_data: dict[str, Any]) -> str:
         if pe_values:
             pe_values.sort()
             median_pe = pe_values[len(pe_values) // 2]
-            ticker_pe = _safe_float(top_ratios.get('Stock P/E', '0'))
+            ticker_pe = _safe_float(top_ratios.get('Stock P/E', '0'), 0.0) or 0.0
             premium = ((ticker_pe - median_pe) / median_pe * 100) if median_pe > 0 else 0
             premium_str = f"+{premium:.0f}%" if premium > 0 else f"{premium:.0f}%"
 
@@ -1202,7 +1194,7 @@ def format_ownership_trends(ticker: str, screener_data: dict[str, Any]) -> str:
                     values = []
                     for col in cols[1:]:  # Skip "Unnamed: 0"
                         val = row.get(col, '')
-                        values.append(_safe_float(val))
+                        values.append(_safe_float(val, 0.0))
                     if values:
                         data[cat] = values
                     break
@@ -1210,7 +1202,7 @@ def format_ownership_trends(ticker: str, screener_data: dict[str, Any]) -> str:
                 values = []
                 for col in cols[1:]:
                     val = row.get(col, '')
-                    values.append(_safe_float(val))
+                    values.append(_safe_float(val, 0.0))
                 if values:
                     pledge_data = {'values': values, 'label': label}
 
@@ -1379,16 +1371,18 @@ def _fetch_govt_rss_items(search_terms: list[str], max_items: int = 3) -> list[d
         try:
             response = requests.get(feed_url, timeout=10)
             parsed = feedparser.parse(response.content)
-            for entry in parsed.get("entries", []):
-                title = entry.get("title", "")
-                summary = entry.get("summary", "")
+            entries = parsed.get("entries", []) if isinstance(parsed, dict) else []
+            for entry in entries:
+                title = str(entry.get("title", "")) if isinstance(entry, dict) else ""
+                summary = str(entry.get("summary", "")) if isinstance(entry, dict) else ""
                 text_lower = (title + " " + summary).lower()
 
                 if any(term.lower() in text_lower for term in search_terms):
+                    url = str(entry.get("link", "")) if isinstance(entry, dict) else ""
                     items.append({
                         "title": title[:100],
                         "snippet": summary[:200],
-                        "url": entry.get("link", ""),
+                        "url": url,
                         "source": feed_url.split("/")[2]
                     })
                     if len(items) >= max_items:
